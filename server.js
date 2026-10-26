@@ -673,20 +673,23 @@ async function handleBotUpdate(update) {
 let updateOffset = 0;
 
 async function startBotPolling() {
-  if (!BOT_TOKEN) {
-    console.warn("BOT_TOKEN is not set. Telegram bot polling is disabled.");
-    return;
-  }
-
+  if (!BOT_TOKEN) { console.warn("BOT_TOKEN is not set. Telegram bot polling is disabled."); return; }
   try {
-    await telegramApi("deleteWebhook", {
-      drop_pending_updates: false
-    });
-
+    await telegramApi("deleteWebhook", { drop_pending_updates: false });
     console.log("Telegram webhook cleared. Bot polling started.");
-  } catch (error) {
-    console.error("Could not clear Telegram webhook:", error.message);
-  }
+  } catch (error) { console.error("Could not clear Telegram webhook:", error.message); }
+  const poll = async () => {
+    try {
+      const updates = await telegramApi("getUpdates", { offset: updateOffset, timeout: 25, allowed_updates: ["message", "callback_query", "pre_checkout_query"] });
+      for (const update of updates) {
+        updateOffset = update.update_id + 1;
+        try { await handleBotUpdate(update); }
+        catch (error) { console.error("Telegram update error:", error.message); }
+      }
+    } catch (error) {
+      console.error("Telegram polling error:", error.message);
+      await new Promise(resolve => setTimeout(resolve, 3000));
+    }
     setImmediate(poll);
   };
   poll();
