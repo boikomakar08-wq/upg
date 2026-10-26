@@ -1,0 +1,17 @@
+{
+  "name": "belivein-mini-app",
+  "version": "1.1.0",
+  "private": true,
+  "description": "BELIVEIN Telegram Mini App and bot backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "pg": "^8.16.3"
+  }
+}
