@@ -22,3 +22,26 @@
 .chance-spin-pointer.spinning{animation:upgradePointerSpin 3.9s cubic-bezier(.08,.72,.08,1) forwards;}
 @keyframes upgradePointerSpin{from{transform:rotate(0deg)}to{transform:rotate(var(--spin-end, 2700deg))}}
 @media(prefers-reduced-motion:reduce){.chance-spin-pointer.spinning{animation-duration:.2s}}
+/* Upgrade item picker and reliable visual result */
+.upgrade-slot-button{font:inherit;color:var(--text);width:100%;cursor:pointer;appearance:none;}
+.upgrade-slot-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.upgrade-slot-button:active{transform:scale(.985)}
+.upgrade-action{width:100%;display:flex;align-items:center;justify-content:center;gap:8px;margin:12px 0 4px;}
+.upgrade-meter .chance-ring{width:183px;height:183px;}
+.upgrade-meter .chance-ring:before{inset:10px;}
+.upgrade-meter .chance-ring b{font-size:31px;}
+.upgrade-meter .chance-spin-pointer{transform-origin:2px 96px;}
+.picker-modal{position:fixed;inset:0;z-index:1000;background:#000a;display:flex;align-items:center;justify-content:center;padding:18px;backdrop-filter:blur(5px)}
+.picker-dialog{width:min(100%,520px);max-height:min(78vh,720px);display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:14px;box-shadow:0 20px 70px #0008}
+.picker-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:2px 2px 12px}
+.picker-head b{font-size:15px}
+.picker-close{width:32px;height:32px;border-radius:10px;background:var(--panel2);font-size:24px;line-height:1;color:var(--muted)}
+.picker-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;overflow:auto;padding:2px 2px 6px}
+.picker-item{min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:12px 8px;border:1px solid var(--line);border-radius:13px;background:var(--bg);color:var(--text);text-align:center}
+.picker-item:active{border-color:var(--accent);background:var(--panel2)}
+.picker-item img,.picker-item .reward-placeholder{width:68px;height:68px;object-fit:contain}
+.picker-item b{font-size:11px;overflow-wrap:anywhere}
+.picker-item small{font-size:10px;color:var(--muted)}
+.case-open-top{width:100%;margin:0 0 13px;position:relative;z-index:2}
+.case-roulette-top{margin-bottom:10px}
+@media(max-width:380px){.upgrade-meter .chance-ring{width:165px;height:165px}.upgrade-meter .chance-spin-pointer{transform-origin:2px 87px}}

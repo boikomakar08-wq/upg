@@ -458,14 +458,16 @@ app.post("/api/upgrade", requireUser, async (req, res) => {
     const rewardResult=await client.query("SELECT id,name,image_url,value,rarity,background_color FROM rewards WHERE id=$1 AND active=TRUE FOR UPDATE",[rewardId]);
     if(!rewardResult.rows[0]) throw Object.assign(new Error("Целевой предмет не найден"),{status:400});
     const stakeItem=stakeResult.rows[0], reward=rewardResult.rows[0];
+    if(Number(reward.value)<=Number(stakeItem.reward_value)) throw Object.assign(new Error("Целевой предмет должен быть дороже ставки"),{status:400});
     const displayedChance=Math.min(75,Math.max(0,(Number(stakeItem.reward_value)/Number(reward.value))*100));
     const loggedChance=displayedChance*0.8;
-    const won=Math.random()*100<loggedChance;
+    // Outcome uses the exact displayed chance; loggedChance remains lower for internal statistics.
+    const won=Math.random()*100<displayedChance;
     await client.query("UPDATE inventory SET status='Апгрейд использован' WHERE id=$1",[inventoryId]);
     await client.query("INSERT INTO upgrades(telegram_id,stake,reward_id,chance,won) VALUES($1,$2,$3,$4,$5)",[req.telegramUser.id,Number(stakeItem.reward_value),reward.id,loggedChance,won]);
     if(won) await client.query("INSERT INTO inventory(telegram_id,reward_name,reward_image,reward_value,reward_rarity,reward_background) VALUES($1,$2,$3,$4,$5,$6)",[req.telegramUser.id,reward.name,reward.image_url,reward.value,reward.rarity||'обычное',reward.background_color||'#123c2b']);
     await client.query("COMMIT");
-    res.json({won,chance:loggedChance*1.25,reward:{id:reward.id,name:reward.name,image_url:reward.image_url,value:reward.value},stake:{id:stakeItem.id,name:stakeItem.reward_name,value:stakeItem.reward_value}});
+    res.json({won,chance:displayedChance,reward:{id:reward.id,name:reward.name,image_url:reward.image_url,value:reward.value},stake:{id:stakeItem.id,name:stakeItem.reward_name,value:stakeItem.reward_value}});
   }catch(error){await client.query("ROLLBACK").catch(()=>{});console.error("Upgrade error:",error);res.status(error.status||500).json({error:error.message||"Не удалось выполнить апгрейд"});}finally{client.release();}
 });
 
