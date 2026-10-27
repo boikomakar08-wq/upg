@@ -114,6 +114,16 @@ async function initDb() {
       credit_amount INTEGER NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS withdrawal_requests (
+      id BIGSERIAL PRIMARY KEY,
+      telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+      inventory_ids BIGINT[] NOT NULL,
+      item_snapshot JSONB NOT NULL DEFAULT '[]'::jsonb,
+      total_value NUMERIC(18,2) NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
     CREATE TABLE IF NOT EXISTS bot_settings (
       key TEXT PRIMARY KEY,
       value JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -217,6 +227,7 @@ app.get("/api/me", requireUser, async (req, res) => {
   try {
     const userResult = await pool.query("SELECT telegram_id, username, first_name, COALESCE(photo_url,$2) AS photo_url, balance, created_at FROM users WHERE telegram_id=$1", [req.telegramUser.id, req.telegramUser.photo_url || null]);
     const inventoryResult = await pool.query(`SELECT id, reward_name, reward_image, reward_value, status, created_at, reward_rarity, reward_background FROM inventory WHERE telegram_id=$1 ORDER BY created_at DESC`, [req.telegramUser.id]);
+    const withdrawalsResult = await pool.query(`SELECT id,total_value,status,created_at,updated_at,item_snapshot FROM withdrawal_requests WHERE telegram_id=$1 ORDER BY created_at DESC LIMIT 20`, [req.telegramUser.id]);
     const statsResult = await pool.query(`
       SELECT
         (SELECT COUNT(*)::int FROM case_openings WHERE telegram_id=$1) AS cases_opened,
@@ -227,10 +238,45 @@ app.get("/api/me", requireUser, async (req, res) => {
     `, [req.telegramUser.id]);
     const user = userResult.rows[0] || null;
     if (user && req.telegramUser.photo_url && !user.photo_url) user.photo_url = req.telegramUser.photo_url;
-    res.json({ user, balance: user?.balance ?? 0, inventory: inventoryResult.rows, stats: statsResult.rows[0] || {} });
+    res.json({ user, balance: user?.balance ?? 0, inventory: inventoryResult.rows, withdrawals: withdrawalsResult.rows, stats: statsResult.rows[0] || {} });
   } catch (error) { console.error("/api/me error:", error); res.status(500).json({ error: "Не удалось загрузить профиль" }); }
 });
 
+app.post("/api/inventory/:id/sell", requireUser, async (req,res) => {
+  if(!pool) return res.status(503).json({error:"База данных не настроена"});
+  const client=await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const item=await client.query("SELECT * FROM inventory WHERE id=$1 AND telegram_id=$2 FOR UPDATE",[req.params.id,req.telegramUser.id]);
+    if(!item.rows[0] || !['Из кейса','owned','Выдан администратором'].includes(item.rows[0].status)) throw Object.assign(new Error("Предмет нельзя продать: он уже использован или находится в заявке"),{status:400});
+    await client.query("UPDATE inventory SET status='Продан' WHERE id=$1",[req.params.id]);
+    await client.query("UPDATE users SET balance=balance+$1,updated_at=NOW() WHERE telegram_id=$2",[item.rows[0].reward_value,req.telegramUser.id]);
+    const bal=await client.query("SELECT balance FROM users WHERE telegram_id=$1",[req.telegramUser.id]);
+    await client.query("COMMIT"); res.json({ok:true,balance:bal.rows[0].balance,price:item.rows[0].reward_value});
+  } catch(e){await client.query("ROLLBACK").catch(()=>{});res.status(e.status||500).json({error:e.message||"Не удалось продать предмет"});} finally{client.release();}
+});
+app.post("/api/withdrawals", requireUser, async (req,res) => {
+  if(!pool || !BOT_TOKEN) return res.status(503).json({error:"Заявки на вывод временно недоступны"});
+  const ids=[...new Set((Array.isArray(req.body?.inventoryIds)?req.body.inventoryIds:[]).map(Number).filter(x=>Number.isSafeInteger(x)&&x>0))];
+  if(!ids.length) return res.status(400).json({error:"Выбери хотя бы один предмет"});
+  const client=await pool.connect(); let request;
+  try{
+    await client.query("BEGIN");
+    const rows=await client.query("SELECT id,reward_name,reward_image,reward_value,reward_rarity FROM inventory WHERE telegram_id=$1 AND id=ANY($2::bigint[]) AND status IN ('Из кейса','owned','Выдан администратором') FOR UPDATE",[req.telegramUser.id,ids]);
+    if(rows.rowCount!==ids.length) throw Object.assign(new Error("Некоторые предметы уже недоступны для вывода. Обнови инвентарь."),{status:400});
+    const total=rows.rows.reduce((a,x)=>a+Number(x.reward_value),0);
+    if(total<50) throw Object.assign(new Error(`Минимальная сумма предметов для вывода — 50 Искр. Сейчас выбрано на ${total.toFixed(2)} Искр.`),{status:400});
+    const user=await client.query("SELECT username,first_name FROM users WHERE telegram_id=$1",[req.telegramUser.id]);
+    const result=await client.query("INSERT INTO withdrawal_requests(telegram_id,inventory_ids,item_snapshot,total_value,status) VALUES($1,$2,$3::jsonb,$4,'pending') RETURNING *",[req.telegramUser.id,ids,JSON.stringify(rows.rows),total]); request=result.rows[0];
+    await client.query("UPDATE inventory SET status='Вывод ожидает' WHERE id=ANY($1::bigint[])",[ids]);
+    await client.query("COMMIT");
+    const uname=user.rows[0]?.username?`@${user.rows[0].username}`:(user.rows[0]?.first_name||'Без имени');
+    const itemsText=rows.rows.map(x=>`• ${escapeHtml(x.reward_name)} — ${Number(x.reward_value)} Искр`).join('\n');
+    const keyboard={inline_keyboard:[[{text:"✅ Выдача закрыта",callback_data:`wd:close:${request.id}`},{text:"❌ Отменить выдачу",callback_data:`wd:cancel:${request.id}`}]]};
+    for(const adminId of ADMIN_IDS) sendText(adminId,`📦 <b>Новая заявка на вывод #${request.id}</b>\nПользователь: ${escapeHtml(uname)}\nTelegram ID: <code>${req.telegramUser.id}</code>\n\n${itemsText}\n\nСумма: <b>${total} Искр</b>`,{parse_mode:"HTML",reply_markup:keyboard}).catch(e=>console.error('Withdrawal notify error:',e.message));
+    res.json({ok:true,request:{id:request.id,status:request.status,total_value:request.total_value,created_at:request.created_at}});
+  }catch(e){await client.query("ROLLBACK").catch(()=>{});res.status(e.status||500).json({error:e.message||"Не удалось создать заявку"});}finally{client.release();}
+});
 app.get("/api/rewards", async (_req, res) => {
   if (!pool) return res.json([]);
   try {
@@ -340,7 +386,7 @@ app.post("/api/cases/:id/open", requireUser, async (req,res) => {
     if(!c.rows[0]) throw Object.assign(new Error("Кейс не найден"),{status:404});
     const box=c.rows[0];
     const user=await client.query("SELECT balance FROM users WHERE telegram_id=$1 FOR UPDATE",[req.telegramUser.id]);
-    if(!user.rows[0] || Number(user.rows[0].balance)<Number(box.price)) throw Object.assign(new Error("Недостаточно звёзд на балансе"),{status:400});
+    if(!user.rows[0] || Number(user.rows[0].balance)<Number(box.price)) throw Object.assign(new Error("Недостаточно Искр на балансе"),{status:400});
     const items=await client.query(`SELECT r.*,ci.real_chance FROM case_items ci JOIN rewards r ON r.id=ci.reward_id WHERE ci.case_id=$1 AND r.active=TRUE ORDER BY r.id`,[box.id]);
     if(!items.rows.length) throw Object.assign(new Error("В этом кейсе пока нет предметов"),{status:400});
     const sum=items.rows.reduce((a,x)=>a+Number(x.real_chance),0);
@@ -360,19 +406,19 @@ app.post("/api/cases/:id/open", requireUser, async (req,res) => {
 app.post("/api/topup", requireUser, async (req, res) => {
   if (!pool || !BOT_TOKEN) return res.status(503).json({ error: "Пополнение временно недоступно: сервер не настроен" });
   const amount = Number(req.body?.amount);
-  if (!Number.isInteger(amount) || amount < 1 || amount > 10000) return res.status(400).json({ error: "Укажи сумму от 1 до 10 000 ⭐" });
+  if (!Number.isInteger(amount) || amount < 1 || amount > 10000) return res.status(400).json({ error: "Укажи сумму от 1 до 10 000 Искр" });
   try {
     const user = req.telegramUser;
     await pool.query(`INSERT INTO users(telegram_id, username, first_name) VALUES($1,$2,$3)
       ON CONFLICT(telegram_id) DO UPDATE SET username=EXCLUDED.username, first_name=EXCLUDED.first_name, updated_at=NOW()`,
       [user.id, user.username || null, user.first_name || null]);
     const payload = `belivein_stars:${user.id}:${crypto.randomUUID()}`;
-    const bonus = Math.floor(amount / 100) * 10;
-    const credit = amount + bonus;
+    const bonus = 0;
+    const credit = amount;
     await pool.query("INSERT INTO pending_payments(invoice_payload,telegram_id,stars_amount,credit_amount) VALUES($1,$2,$3,$4)", [payload, user.id, amount, credit]);
     const link = await telegramApi("createInvoiceLink", {
-      title: `Пополнение BELIVEIN на ${amount} ⭐`,
-      description: bonus ? `На баланс поступит ${credit} ⭐ (включая бонус ${bonus} ⭐).` : `Пополнение баланса на ${amount} ⭐.`,
+      title: `Пополнение BELIVEIN на ${amount} Искр`,
+      description: `Оплата ${amount} Telegram Stars. На баланс поступит ${amount} Искр. Курс: 1 Star = 1 Искра.`,
       payload,
       provider_token: "",
       currency: "XTR",
@@ -437,8 +483,8 @@ async function findUserByUsername(username) {
   return result.rows[0] || null;
 }
 async function notifyTopup(userId, creditedAmount, paidAmount) {
-  const template = await getSetting("topup_notification", { text: "✅ Баланс успешно пополнен!\n\nЗачислено: <b>(upbal) ⭐</b>" });
-  const text = String(template.text || "Баланс пополнен: <b>(upbal) ⭐</b>").replaceAll("(upbal)", String(creditedAmount));
+  const template = await getSetting("topup_notification", { text: "✅ Баланс успешно пополнен!\n\nЗачислено: <b>(upbal) Искр</b>" });
+  const text = String(template.text || "Баланс пополнен: <b>(upbal) Искр</b>").replaceAll("(upbal)", String(creditedAmount));
   const extra = { parse_mode: "HTML" };
   try {
     if (template.mediaType === "photo" && template.fileId) {
@@ -450,7 +496,7 @@ async function notifyTopup(userId, creditedAmount, paidAmount) {
     }
   } catch (error) {
     console.error("Top-up notification error:", error.message);
-    await sendText(userId, `✅ Баланс пополнен. Зачислено: ${creditedAmount} ⭐ (оплачено ${paidAmount} ⭐).`).catch(() => {});
+    await sendText(userId, `✅ Баланс пополнен. Зачислено: ${creditedAmount} Искр (оплачено ${paidAmount} Telegram Stars).`).catch(() => {});
   }
 }
 
@@ -484,7 +530,7 @@ async function processSuccessfulPayment(message) {
   if (creditInfo) {
     await notifyTopup(creditInfo.userId, creditInfo.credited, creditInfo.paid);
     for (const adminId of ADMIN_IDS) {
-      sendText(adminId, `💳 <b>Новое пополнение</b>\nПользователь: <code>${escapeHtml(creditInfo.userId)}</code>\nОплачено: ${creditInfo.paid} ⭐\nЗачислено: ${creditInfo.credited} ⭐`, { parse_mode: "HTML" }).catch(() => {});
+      sendText(adminId, `💳 <b>Новое пополнение</b>\nПользователь: <code>${escapeHtml(creditInfo.userId)}</code>\nОплачено: ${creditInfo.paid} Telegram Stars\nЗачислено: ${creditInfo.credited} Искр`, { parse_mode: "HTML" }).catch(() => {});
     }
   }
 }
@@ -501,7 +547,7 @@ async function handleAdminText(message) {
     state.username = parseUsername(message.text);
     if (!state.username) { await sendText(message.chat.id, "Введи @username пользователя. /cancel — отмена."); return true; }
     state.step = "balance_amount";
-    await sendText(message.chat.id, "Введи количество ⭐ для начисления:"); return true;
+    await sendText(message.chat.id, "Введи количество Искр для начисления:"); return true;
   }
   if (state.step === "balance_amount") {
     const amount = Number(message.text);
@@ -509,8 +555,8 @@ async function handleAdminText(message) {
     const user = await findUserByUsername(state.username);
     if (!user) { await sendText(message.chat.id, `Не нашёл @${escapeHtml(state.username)} в базе. Пользователь должен хотя бы раз открыть бота.`, { parse_mode: "HTML" }); adminState.delete(adminId); return true; }
     await pool.query("UPDATE users SET balance=balance+$1,updated_at=NOW() WHERE telegram_id=$2", [amount, user.telegram_id]);
-    await sendText(message.chat.id, `Готово: @${escapeHtml(user.username || state.username)} начислено ${amount} ⭐.`, { parse_mode: "HTML" });
-    await sendText(user.telegram_id, `💰 Администратор начислил на твой баланс ${amount} ⭐.`).catch(() => {});
+    await sendText(message.chat.id, `Готово: @${escapeHtml(user.username || state.username)} начислено ${amount} Искр.`, { parse_mode: "HTML" });
+    await sendText(user.telegram_id, `💰 Администратор начислил на твой баланс ${amount} Искр.`).catch(() => {});
     adminState.delete(adminId); return true;
   }
   if (state.step === "broadcast") {
@@ -530,7 +576,7 @@ async function handleAdminText(message) {
   if (state.step === "template") {
     if (!message.text && !message.photo && !message.animation) { await sendText(message.chat.id, "Пришли текст, фото с подписью или GIF с подписью. В шаблоне используй (upbal). /cancel — отмена."); return true; }
     const value = {
-      text: message.text || message.caption || "Баланс пополнен: <b>(upbal) ⭐</b>",
+      text: message.text || message.caption || "Баланс пополнен: <b>(upbal) Искр</b>",
       mediaType: message.photo ? "photo" : message.animation ? "animation" : null,
       fileId: message.photo ? message.photo[message.photo.length - 1].file_id : message.animation?.file_id || null
     };
@@ -585,6 +631,31 @@ async function handleAdminText(message) {
 
 async function handleCallback(callback) {
   const fromId = String(callback.from.id);
+  if (callback.data?.startsWith("wd:")) {
+    if (!isAdmin(fromId)) { await telegramApi("answerCallbackQuery", { callback_query_id: callback.id, text: "Нет доступа", show_alert: true }).catch(()=>{}); return; }
+    await telegramApi("answerCallbackQuery", { callback_query_id: callback.id }).catch(()=>{});
+    const [,action,rawId]=callback.data.split(":"); const id=Number(rawId);
+    if(!pool || !Number.isSafeInteger(id)) return;
+    const client=await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const q=await client.query("SELECT * FROM withdrawal_requests WHERE id=$1 FOR UPDATE",[id]); const w=q.rows[0];
+      if(!w || w.status!=='pending'){await client.query("ROLLBACK");await sendText(callback.message.chat.id,`Заявка #${id} уже обработана.`);return;}
+      if(action==='close'){
+        await client.query("UPDATE withdrawal_requests SET status='closed',updated_at=NOW() WHERE id=$1",[id]);
+        await client.query("UPDATE inventory SET status='Вывод закрыт' WHERE id=ANY($1::bigint[])",[w.inventory_ids]);
+      } else if(action==='cancel') {
+        await client.query("UPDATE withdrawal_requests SET status='cancelled',updated_at=NOW() WHERE id=$1",[id]);
+        await client.query("UPDATE inventory SET status='Из кейса' WHERE id=ANY($1::bigint[]) AND status='Вывод ожидает'",[w.inventory_ids]);
+      } else {await client.query("ROLLBACK");return;}
+      await client.query("COMMIT");
+      const status=action==='close'?'ЗАКРЫТО':'ОТМЕНЕНО';
+      await telegramApi("editMessageReplyMarkup",{chat_id:callback.message.chat.id,message_id:callback.message.message_id,reply_markup:{inline_keyboard:[]}}).catch(()=>{});
+      await sendText(callback.message.chat.id,`Заявка #${id}: ${status}.`);
+      await sendText(w.telegram_id,action==='close'?`✅ Заявка на вывод #${id} закрыта. Статус: Закрыто.`:`❌ Заявка на вывод #${id} отменена. Предметы возвращены в инвентарь.`).catch(()=>{});
+    } catch(e){await client.query("ROLLBACK").catch(()=>{});console.error('Withdrawal callback error:',e);await sendText(callback.message.chat.id,'Не удалось обновить заявку.');} finally{client.release();}
+    return;
+  }
   if (!callback.data?.startsWith("adm:")) return;
   if (!isAdmin(fromId)) {
     await telegramApi("answerCallbackQuery", { callback_query_id: callback.id, text: "Нет доступа", show_alert: true }).catch(() => {});
@@ -665,13 +736,12 @@ async function handleBotUpdate(update) {
     if (!user) return sendText(message.chat.id, "Пользователь не найден. Он должен хотя бы раз открыть бота.");
     await pool.query("UPDATE users SET balance=balance+$1,updated_at=NOW() WHERE telegram_id=$2", [amount, user.telegram_id]);
     await sendText(message.chat.id, `Начислено ${amount} ⭐ пользователю @${user.username || username.replace(/^@/, "")}.`);
-    await sendText(user.telegram_id, `💰 Администратор начислил на твой баланс ${amount} ⭐.`).catch(() => {});
+    await sendText(user.telegram_id, `💰 Администратор начислил на твой баланс ${amount} Искр.`).catch(() => {});
     return;
   }
 }
 
 let updateOffset = 0;
-
 async function startBotPolling() {
   if (!BOT_TOKEN) { console.warn("BOT_TOKEN is not set. Telegram bot polling is disabled."); return; }
   try {
