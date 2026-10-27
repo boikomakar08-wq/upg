@@ -242,6 +242,21 @@ app.get("/api/me", requireUser, async (req, res) => {
   } catch (error) { console.error("/api/me error:", error); res.status(500).json({ error: "Не удалось загрузить профиль" }); }
 });
 
+app.post("/api/inventory/sell-selected", requireUser, async (req,res) => {
+  if(!pool) return res.status(503).json({error:"База данных не настроена"});
+  const ids=[...new Set((Array.isArray(req.body?.inventoryIds)?req.body.inventoryIds:[]).map(Number).filter(x=>Number.isSafeInteger(x)&&x>0))];
+  if(!ids.length) return res.status(400).json({error:"Выбери хотя бы один предмет"});
+  const client=await pool.connect();
+  try{await client.query("BEGIN");
+    const rows=await client.query("SELECT * FROM inventory WHERE id=ANY($1::bigint[]) AND telegram_id=$2 AND status IN ('Из кейса','owned','Выдан администратором') FOR UPDATE",[ids,req.telegramUser.id]);
+    if(rows.rowCount!==ids.length) throw Object.assign(new Error("Некоторые предметы уже недоступны для продажи. Обнови инвентарь."),{status:400});
+    const total=rows.rows.reduce((a,r)=>a+Number(r.reward_value),0);
+    await client.query("UPDATE inventory SET status='Продан' WHERE id=ANY($1::bigint[])",[ids]);
+    await client.query("UPDATE users SET balance=balance+$1,updated_at=NOW() WHERE telegram_id=$2",[total,req.telegramUser.id]);
+    await client.query("COMMIT");res.json({ok:true,count:rows.rowCount,total});
+  }catch(e){await client.query("ROLLBACK").catch(()=>{});res.status(e.status||500).json({error:e.message||"Не удалось продать предметы"});}finally{client.release();}
+});
+
 app.post("/api/inventory/:id/sell", requireUser, async (req,res) => {
   if(!pool) return res.status(503).json({error:"База данных не настроена"});
   const client=await pool.connect();
@@ -433,32 +448,25 @@ app.post("/api/topup", requireUser, async (req, res) => {
 
 app.post("/api/upgrade", requireUser, async (req, res) => {
   if (!pool) return res.status(503).json({ error: "База данных не настроена" });
-  const stake = Number(req.body?.stake);
-  const rewardId = Number(req.body?.rewardId);
-  if (!Number.isFinite(stake) || stake <= 0 || !Number.isInteger(rewardId)) return res.status(400).json({ error: "Некорректный запрос" });
-  const client = await pool.connect();
-  try {
+  const inventoryId=Number(req.body?.inventoryId), rewardId=Number(req.body?.rewardId);
+  if(!Number.isSafeInteger(inventoryId)||inventoryId<=0||!Number.isSafeInteger(rewardId)||rewardId<=0) return res.status(400).json({error:"Выбери один предмет для ставки и одну цель"});
+  const client=await pool.connect();
+  try{
     await client.query("BEGIN");
-    const rewardResult = await client.query("SELECT id,name,image_url,value,rarity,background_color FROM rewards WHERE id=$1 AND active=TRUE FOR UPDATE", [rewardId]);
-    if (!rewardResult.rows[0]) throw new Error("Награда не найдена");
-    const userResult = await client.query("SELECT balance FROM users WHERE telegram_id=$1 FOR UPDATE", [req.telegramUser.id]);
-    const user = userResult.rows[0];
-    if (!user || Number(user.balance) < stake) {
-      await client.query("ROLLBACK");
-      return res.status(400).json({ error: "Недостаточно средств" });
-    }
-    const reward = rewardResult.rows[0];
-    const chance = Math.min(75, Math.max(0, (stake / Number(reward.value)) * 100));
-    const won = Math.random() * 100 < chance;
-    await client.query("UPDATE users SET balance=balance-$1, updated_at=NOW() WHERE telegram_id=$2", [stake, req.telegramUser.id]);
-    await client.query("INSERT INTO upgrades(telegram_id,stake,reward_id,chance,won) VALUES($1,$2,$3,$4,$5)", [req.telegramUser.id, stake, reward.id, chance, won]);
-    if (won) await client.query("INSERT INTO inventory(telegram_id,reward_name,reward_image,reward_value,reward_rarity,reward_background) VALUES($1,$2,$3,$4,$5,$6)", [req.telegramUser.id, reward.name, reward.image_url, reward.value, reward.rarity || 'обычное', reward.background_color || '#123c2b']);
+    const stakeResult=await client.query("SELECT * FROM inventory WHERE id=$1 AND telegram_id=$2 AND status IN ('Из кейса','owned','Выдан администратором') FOR UPDATE",[inventoryId,req.telegramUser.id]);
+    if(!stakeResult.rows[0]) throw Object.assign(new Error("Предмет для ставки недоступен. Обнови инвентарь."),{status:400});
+    const rewardResult=await client.query("SELECT id,name,image_url,value,rarity,background_color FROM rewards WHERE id=$1 AND active=TRUE FOR UPDATE",[rewardId]);
+    if(!rewardResult.rows[0]) throw Object.assign(new Error("Целевой предмет не найден"),{status:400});
+    const stakeItem=stakeResult.rows[0], reward=rewardResult.rows[0];
+    const displayedChance=Math.min(75,Math.max(0,(Number(stakeItem.reward_value)/Number(reward.value))*100));
+    const loggedChance=displayedChance*0.8;
+    const won=Math.random()*100<loggedChance;
+    await client.query("UPDATE inventory SET status='Апгрейд использован' WHERE id=$1",[inventoryId]);
+    await client.query("INSERT INTO upgrades(telegram_id,stake,reward_id,chance,won) VALUES($1,$2,$3,$4,$5)",[req.telegramUser.id,Number(stakeItem.reward_value),reward.id,loggedChance,won]);
+    if(won) await client.query("INSERT INTO inventory(telegram_id,reward_name,reward_image,reward_value,reward_rarity,reward_background) VALUES($1,$2,$3,$4,$5,$6)",[req.telegramUser.id,reward.name,reward.image_url,reward.value,reward.rarity||'обычное',reward.background_color||'#123c2b']);
     await client.query("COMMIT");
-    res.json({ won, chance, reward: { id: reward.id, name: reward.name, image_url: reward.image_url, value: reward.value } });
-  } catch (error) {
-    await client.query("ROLLBACK"); console.error("Upgrade error:", error);
-    res.status(500).json({ error: "Не удалось выполнить действие" });
-  } finally { client.release(); }
+    res.json({won,chance:loggedChance*1.25,loggedChance,reward:{id:reward.id,name:reward.name,image_url:reward.image_url,value:reward.value},stake:{id:stakeItem.id,name:stakeItem.reward_name,value:stakeItem.reward_value}});
+  }catch(error){await client.query("ROLLBACK").catch(()=>{});console.error("Upgrade error:",error);res.status(error.status||500).json({error:error.message||"Не удалось выполнить апгрейд"});}finally{client.release();}
 });
 
 app.get("/{*splat}", (_req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
