@@ -465,7 +465,7 @@ app.post("/api/upgrade", requireUser, async (req, res) => {
     await client.query("INSERT INTO upgrades(telegram_id,stake,reward_id,chance,won) VALUES($1,$2,$3,$4,$5)",[req.telegramUser.id,Number(stakeItem.reward_value),reward.id,loggedChance,won]);
     if(won) await client.query("INSERT INTO inventory(telegram_id,reward_name,reward_image,reward_value,reward_rarity,reward_background) VALUES($1,$2,$3,$4,$5,$6)",[req.telegramUser.id,reward.name,reward.image_url,reward.value,reward.rarity||'обычное',reward.background_color||'#123c2b']);
     await client.query("COMMIT");
-    res.json({won,chance:loggedChance*1.25,loggedChance,reward:{id:reward.id,name:reward.name,image_url:reward.image_url,value:reward.value},stake:{id:stakeItem.id,name:stakeItem.reward_name,value:stakeItem.reward_value}});
+    res.json({won,chance:loggedChance*1.25,reward:{id:reward.id,name:reward.name,image_url:reward.image_url,value:reward.value},stake:{id:stakeItem.id,name:stakeItem.reward_name,value:stakeItem.reward_value}});
   }catch(error){await client.query("ROLLBACK").catch(()=>{});console.error("Upgrade error:",error);res.status(error.status||500).json({error:error.message||"Не удалось выполнить апгрейд"});}finally{client.release();}
 });
 
