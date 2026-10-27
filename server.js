@@ -226,7 +226,7 @@ app.get("/api/me", requireUser, async (req, res) => {
   if (!pool) return res.json({ user: { telegram_id: req.telegramUser.id, username: req.telegramUser.username || null, first_name: req.telegramUser.first_name || null, photo_url: req.telegramUser.photo_url || null, created_at: null }, balance: 0, inventory: [], stats: {} });
   try {
     const userResult = await pool.query("SELECT telegram_id, username, first_name, COALESCE(photo_url,$2) AS photo_url, balance, created_at FROM users WHERE telegram_id=$1", [req.telegramUser.id, req.telegramUser.photo_url || null]);
-    const inventoryResult = await pool.query(`SELECT id, reward_name, reward_image, reward_value, status, created_at, reward_rarity, reward_background FROM inventory WHERE telegram_id=$1 ORDER BY created_at DESC`, [req.telegramUser.id]);
+    const inventoryResult = await pool.query(`SELECT id, reward_name, reward_image, reward_value, status, created_at, reward_rarity, reward_background FROM inventory WHERE telegram_id=$1 AND status NOT IN ('Продан','Апгрейд использован') ORDER BY created_at DESC`, [req.telegramUser.id]);
     const withdrawalsResult = await pool.query(`SELECT id,total_value,status,created_at,updated_at,item_snapshot FROM withdrawal_requests WHERE telegram_id=$1 ORDER BY created_at DESC LIMIT 20`, [req.telegramUser.id]);
     const statsResult = await pool.query(`
       SELECT
