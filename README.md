@@ -1,6 +1,6 @@
 # BELIVEIN Mini App — Railway build
 
-Telegram Mini App + Express 5 / PostgreSQL backend. Includes Telegram Stars top-ups, case catalog, item/case management from the Mini App admin area, case opening with server-side real odds, inventory selling, withdrawal requests with Telegram admin approval/cancellation buttons, profile withdrawal statuses, Stars-to-Iskry conversion (1 Star = 1 Искра), animated case roulette with server-authoritative real odds, sound effects, and persistent light/dark theme selection.
+Telegram Mini App + Express 5 / PostgreSQL backend. Includes Telegram Stars top-ups, case catalog, item/case management from the Mini App admin area, case opening with server-side real odds, inventory selling, withdrawal requests with Telegram admin approval/cancellation buttons, profile withdrawal statuses, Stars-to-Iskry conversion (1 Star = 1 Искра), animated case roulette with server-authoritative real odds, sound effects, and persistent light/dark theme selection, subscription-gated free daily gift (24-hour cooldown) with admin-configurable reward odds, and a non-wagering DOUBLE visual demo.
 
 ## Deploy to Railway
 
@@ -22,6 +22,8 @@ Open the Mini App as a Telegram user whose numeric ID is listed in `ADMIN_IDS`, 
 - Create/edit items: image, name, description, value, rarity.
 - Create/edit cases: image, name, description, price.
 - Add items to a case and set both visual and real odds. The real odds must total exactly 100% for the case to open. Public case contents show only visual odds; real odds are kept server-side and shown only to admins.
+- Daily gift settings: open Admin panel → Ежедневный подарок. Enter each active reward as `ID: chance`, one per line (example `12: 50`), with odds totaling exactly 100%. The API checks subscription to `@BELIVEIN_OG`; the bot must be an administrator in that channel for reliable membership checks. A claim is available once every 24 hours.
+- DOUBLE is a visual demo only: it does not accept stakes, debit Искры, or award balance.
 - Uploaded images are resized in the browser and stored as data URLs in PostgreSQL, so they survive Railway redeploys without a local disk volume. Keep images reasonably small.
 
 ## Notes

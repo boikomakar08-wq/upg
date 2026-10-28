@@ -129,6 +129,12 @@ async function initDb() {
       value JSONB NOT NULL DEFAULT '{}'::jsonb,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS daily_case_claims (
+      id BIGSERIAL PRIMARY KEY,
+      telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+      claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS daily_case_claims_user_time_idx ON daily_case_claims(telegram_id, claimed_at DESC);
   `);
   // Safe migrations for existing Railway databases created by earlier versions.
   await pool.query(`
@@ -216,6 +222,61 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>\"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
 }
 function parseUsername(value) { return String(value || "").trim().replace(/^@/, "").toLowerCase(); }
+
+// Daily free case: no stake or balance deduction; reward selection is server-side.
+const DAILY_CASE_DEFAULT = { enabled: true, title: "Ежедневный подарок", description: "Бесплатный предмет раз в 24 часа. Подпишись на канал, чтобы забрать подарок.", reward_lines: "" };
+app.get("/api/daily-case", requireUser, async (req,res) => {
+  if (!pool) return res.status(503).json({error:"База данных не настроена"});
+  try {
+    const cfg = await getSetting("daily_case", DAILY_CASE_DEFAULT);
+    const last = await pool.query("SELECT claimed_at FROM daily_case_claims WHERE telegram_id=$1 ORDER BY claimed_at DESC LIMIT 1", [req.telegramUser.id]);
+    const lastAt = last.rows[0]?.claimed_at ? new Date(last.rows[0].claimed_at) : null;
+    const nextAt = lastAt ? new Date(lastAt.getTime()+24*60*60*1000) : null;
+    const items = await pool.query(`SELECT r.id,r.name,r.image_url,r.value,r.rarity,dc.real_chance FROM (SELECT (regexp_match(line,'^\\s*(\\d+)\\s*:\\s*(\\d+(?:\\.\\d+)?)\\s*$'))[1]::bigint AS reward_id, (regexp_match(line,'^\\s*(\\d+)\\s*:\\s*(\\d+(?:\\.\\d+)?)\\s*$'))[2]::numeric AS real_chance FROM regexp_split_to_table($1,E'\\n') AS lines(line)) dc JOIN rewards r ON r.id=dc.reward_id AND r.active=TRUE ORDER BY r.value`, [String(cfg.reward_lines||"")]);
+    res.json({enabled:cfg.enabled!==false,title:cfg.title||DAILY_CASE_DEFAULT.title,description:cfg.description||DAILY_CASE_DEFAULT.description,items:items.rows.map(({real_chance,...r})=>r),claimed:!!nextAt&&nextAt>Date.now(),next_at:nextAt,subscribed:await checkSubscription(req.telegramUser.id)});
+  } catch(e) { console.error("Daily case status error:",e); res.status(500).json({error:"Не удалось загрузить ежедневный подарок"}); }
+});
+app.post("/api/daily-case/claim", requireUser, async (req,res) => {
+  if (!pool) return res.status(503).json({error:"База данных не настроена"});
+  const client=await pool.connect();
+  try {
+    const cfg=await getSetting("daily_case", DAILY_CASE_DEFAULT);
+    if(cfg.enabled===false) throw Object.assign(new Error("Ежедневный подарок временно отключён"),{status:400});
+    if(!await checkSubscription(req.telegramUser.id)) throw Object.assign(new Error("Сначала подпишись на @BELIVEIN_OG, затем нажми «Проверить подписку»"),{status:403});
+    await client.query("BEGIN");
+    await client.query("SELECT telegram_id FROM users WHERE telegram_id=$1 FOR UPDATE",[req.telegramUser.id]);
+    const last=await client.query("SELECT claimed_at FROM daily_case_claims WHERE telegram_id=$1 ORDER BY claimed_at DESC LIMIT 1",[req.telegramUser.id]);
+    if(last.rows[0] && Date.now()-new Date(last.rows[0].claimed_at).getTime()<24*60*60*1000) throw Object.assign(new Error("Ты уже забрал подарок. Возвращайся через 24 часа."),{status:429});
+    const parsed=String(cfg.reward_lines||"").split(/\r?\n/).map(line=>{const m=line.trim().match(/^(\d+)\s*:\s*(\d+(?:\.\d+)?)$/);return m?{id:Number(m[1]),chance:Number(m[2])}:null}).filter(x=>x&&x.id>0&&x.chance>0&&x.chance<=100);
+    if(!parsed.length || Math.abs(parsed.reduce((a,x)=>a+x.chance,0)-100)>.01) throw Object.assign(new Error("Ежедневный подарок ещё не настроен администратором"),{status:503});
+    const ids=parsed.map(x=>x.id);
+    const found=await client.query("SELECT id,name,image_url,value,rarity,background_color FROM rewards WHERE id=ANY($1::bigint[]) AND active=TRUE",[ids]);
+    const map=new Map(found.rows.map(x=>[Number(x.id),x]));
+    const poolItems=parsed.filter(x=>map.has(x.id));
+    if(!poolItems.length||Math.abs(poolItems.reduce((a,x)=>a+x.chance,0)-100)>.01) throw Object.assign(new Error("Состав ежедневного подарка некорректен. Сообщи администратору."),{status:503});
+    let roll=Math.random()*100,acc=0,picked=poolItems[poolItems.length-1];
+    for(const item of poolItems){acc+=item.chance;if(roll<acc){picked=item;break;}}
+    const reward=map.get(picked.id);
+    await client.query("INSERT INTO daily_case_claims(telegram_id) VALUES($1)",[req.telegramUser.id]);
+    await client.query(`INSERT INTO inventory(telegram_id,reward_name,reward_image,reward_value,status,reward_rarity,reward_background) VALUES($1,$2,$3,$4,'Из кейса',$5,$6)`,[req.telegramUser.id,reward.name,reward.image_url,reward.value,reward.rarity,reward.background_color]);
+    await client.query("COMMIT");
+    res.json({ok:true,reward:{id:reward.id,name:reward.name,image_url:reward.image_url,value:reward.value,rarity:reward.rarity},next_at:new Date(Date.now()+24*60*60*1000)});
+  } catch(e) { await client.query("ROLLBACK").catch(()=>{}); res.status(e.status||500).json({error:e.message||"Не удалось забрать подарок"}); }
+  finally { client.release(); }
+});
+app.get("/api/admin/daily-case", requireUser, requireAdmin, async (_req,res)=>{
+  try { const cfg=await getSetting("daily_case",DAILY_CASE_DEFAULT); const items=await pool.query("SELECT id,name,value,active FROM rewards ORDER BY value ASC"); res.json({config:cfg,items:items.rows}); }
+  catch(e){res.status(500).json({error:"Не удалось загрузить настройки ежедневного подарка"});}
+});
+app.put("/api/admin/daily-case", requireUser, requireAdmin, async (req,res)=>{
+  const body=req.body||{}; const title=String(body.title||"").trim().slice(0,80); const description=String(body.description||"").trim().slice(0,300); const reward_lines=String(body.reward_lines||"").trim();
+  if(!title) return res.status(400).json({error:"Укажи название подарка"});
+  const parsed=reward_lines.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
+  let sum=0; for(const line of parsed){const m=line.match(/^(\d+)\s*:\s*(\d+(?:\.\d+)?)$/);if(!m)return res.status(400).json({error:`Неверная строка «${line}». Формат: ID: шанс`});const id=Number(m[1]),chance=Number(m[2]);if(id<1||chance<=0||chance>100)return res.status(400).json({error:"ID должен быть положительным, шанс — от 0 до 100"});sum+=chance;}
+  if(!parsed.length||Math.abs(sum-100)>.01)return res.status(400).json({error:`Сумма шансов должна быть 100%. Сейчас: ${sum.toFixed(2)}%`});
+  try {const ids=parsed.map(line=>Number(line.match(/^(\d+)/)[1]));const found=await pool.query("SELECT id FROM rewards WHERE id=ANY($1::bigint[]) AND active=TRUE",[ids]);if(found.rowCount!==new Set(ids).size)return res.status(400).json({error:"Проверь ID предметов: каждый должен существовать, быть активным и не повторяться"});await setSetting("daily_case",{enabled:body.enabled!==false,title,description,reward_lines});res.json({ok:true});}
+  catch(e){console.error(e);res.status(500).json({error:"Не удалось сохранить ежедневный подарок"});}
+});
 
 app.get("/api/subscription", requireUser, async (req, res) => {
   try { res.json({ subscribed: await checkSubscription(req.telegramUser.id) }); }
