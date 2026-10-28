@@ -160,6 +160,7 @@ async function initDb() {
   // Safe migrations for existing Railway databases created by earlier versions.
   await pool.query(`
     ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS upgrader_multiplier NUMERIC(4,2) NOT NULL DEFAULT 1;
     ALTER TABLE rewards ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
     ALTER TABLE rewards ADD COLUMN IF NOT EXISTS rarity TEXT NOT NULL DEFAULT 'обычное';
     ALTER TABLE rewards ADD COLUMN IF NOT EXISTS background_color TEXT NOT NULL DEFAULT '#123c2b';
@@ -243,71 +244,6 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>\"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
 }
 function parseUsername(value) { return String(value || "").trim().replace(/^@/, "").toLowerCase(); }
-
-app.get("/api/admin/free-case", requireUser, requireAdmin, async (_req, res) => {
-  try {
-    const setting = await getSetting("free_case_reward_ids", { ids: [] });
-    const rewards = await pool.query("SELECT id,name,image_url,value,rarity,active FROM rewards ORDER BY name");
-    res.json({ ids: Array.isArray(setting.ids) ? setting.ids.map(Number) : [], rewards: rewards.rows });
-  } catch (error) { res.status(500).json({ error: "Не удалось загрузить содержимое бесплатного кейса" }); }
-});
-app.put("/api/admin/free-case", requireUser, requireAdmin, async (req, res) => {
-  const ids = [...new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter(n => Number.isSafeInteger(n) && n > 0))];
-  try {
-    const found = ids.length ? await pool.query("SELECT id FROM rewards WHERE id=ANY($1::bigint[]) AND active=TRUE", [ids]) : { rows: [] };
-    if (found.rows.length !== ids.length) return res.status(400).json({ error: "Выбранный предмет неактивен или не существует" });
-    await setSetting("free_case_reward_ids", { ids });
-    res.json({ ok: true, ids });
-  } catch (error) { res.status(500).json({ error: "Не удалось сохранить содержимое бесплатного кейса" }); }
-});
-
-app.get("/api/free-case/contents", async (_req, res) => {
-  if (!pool) return res.status(503).json({ error: "База данных не настроена" });
-  try {
-    const setting = await getSetting("free_case_reward_ids", { ids: [] });
-    const ids = Array.isArray(setting.ids) ? setting.ids.map(Number).filter(n => Number.isSafeInteger(n) && n > 0) : [];
-    const result = ids.length
-      ? await pool.query("SELECT id,name,image_url,value,rarity FROM rewards WHERE active=TRUE AND id=ANY($1::bigint[]) ORDER BY id", [ids])
-      : await pool.query("SELECT id,name,image_url,value,rarity FROM rewards WHERE active=TRUE ORDER BY id");
-    res.json({ rewards: result.rows });
-  } catch (error) { console.error("Free case contents error:", error); res.status(500).json({ error: "Не удалось загрузить содержимое кейса" }); }
-});
-
-app.get("/api/free-case/status", requireUser, async (req, res) => {
-  if (!pool) return res.status(503).json({ error: "База данных не настроена" });
-  try {
-    const r = await pool.query("SELECT claimed_at FROM free_case_claims WHERE telegram_id=$1", [req.telegramUser.id]);
-    const claimedAt = r.rows[0]?.claimed_at || null;
-    const nextAt = claimedAt ? new Date(new Date(claimedAt).getTime() + 24 * 60 * 60 * 1000) : null;
-    res.json({ claimedAt, nextAt, available: !nextAt || nextAt.getTime() <= Date.now(), channel: CHANNEL_USERNAME });
-  } catch (error) { console.error("Free case status error:", error); res.status(500).json({ error: "Не удалось загрузить статус кейса" }); }
-});
-
-app.post("/api/free-case/open", requireUser, async (req, res) => {
-  if (!pool) return res.status(503).json({ error: "База данных не настроена" });
-  const subscribed = await checkSubscription(req.telegramUser.id).catch(() => false);
-  if (!subscribed) return res.status(403).json({ error: `Сначала подпишись на ${CHANNEL_USERNAME}, затем нажми Verify Subscription.` });
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const claim = await client.query("SELECT claimed_at FROM free_case_claims WHERE telegram_id=$1 FOR UPDATE", [req.telegramUser.id]);
-    const last = claim.rows[0]?.claimed_at ? new Date(claim.rows[0].claimed_at).getTime() : 0;
-    const waitMs = 24 * 60 * 60 * 1000 - (Date.now() - last);
-    if (waitMs > 0) throw Object.assign(new Error(`Бесплатный кейс уже открыт. Попробуй через ${Math.ceil(waitMs / 3600000)} ч.`), { status: 429 });
-    const freeCaseSetting = await getSetting("free_case_reward_ids", { ids: [] });
-    const configuredIds = Array.isArray(freeCaseSetting.ids) ? freeCaseSetting.ids.map(Number).filter(n => Number.isSafeInteger(n) && n > 0) : [];
-    const rewards = configuredIds.length
-      ? await client.query("SELECT id,name,image_url,value,description,rarity,background_color FROM rewards WHERE active=TRUE AND id=ANY($1::bigint[]) ORDER BY id", [configuredIds])
-      : await client.query("SELECT id,name,image_url,value,description,rarity,background_color FROM rewards WHERE active=TRUE ORDER BY id");
-    if (!rewards.rows.length) throw Object.assign(new Error("В кейсе пока нет содержимого. Администратор должен добавить активные предметы."), { status: 503 });
-    const reward = rewards.rows[Math.floor(Math.random() * rewards.rows.length)];
-    await client.query(`INSERT INTO inventory(telegram_id,reward_name,reward_image,reward_value,reward_rarity,reward_background,status) VALUES($1,$2,$3,$4,$5,$6,'Из кейса')`, [req.telegramUser.id, reward.name, reward.image_url, reward.value, reward.rarity || 'обычное', reward.background_color || '#123c2b']);
-    await client.query(`INSERT INTO free_case_claims(telegram_id,claimed_at,reward_snapshot) VALUES($1,NOW(),$2::jsonb) ON CONFLICT(telegram_id) DO UPDATE SET claimed_at=NOW(),reward_snapshot=EXCLUDED.reward_snapshot`, [req.telegramUser.id, JSON.stringify({ id: reward.id, name: reward.name, value: reward.value })]);
-    await client.query("COMMIT");
-    res.json({ ok: true, reward: { id: reward.id, name: reward.name, image_url: reward.image_url, value: reward.value, rarity: reward.rarity }, nextAvailableAt: new Date(Date.now() + 86400000).toISOString() });
-  } catch (error) { await client.query("ROLLBACK").catch(() => {}); res.status(error.status || 500).json({ error: error.message || "Не удалось открыть бесплатный кейс" }); }
-  finally { client.release(); }
-});
 
 app.get("/api/subscription", requireUser, async (req, res) => {
   try { res.json({ subscribed: await checkSubscription(req.telegramUser.id) }); }
@@ -578,6 +514,19 @@ app.post("/api/cases/:id/open", requireUser, async (req,res) => {
   finally{client.release();}
 });
 
+app.post("/api/cases/:id/open-many", requireUser, async (req,res) => {
+  if(!pool)return res.status(503).json({error:"База данных не настроена"});
+  const count=Number(req.body?.count);if(!Number.isInteger(count)||count<2||count>3)return res.status(400).json({error:"Можно открыть от 2 до 3 кейсов"});
+  const client=await pool.connect();try{await client.query("BEGIN");
+    const c=await client.query("SELECT * FROM cases WHERE id=$1 AND active=TRUE FOR UPDATE",[req.params.id]);if(!c.rows[0])throw Object.assign(new Error("Кейс не найден"),{status:404});const box=c.rows[0];
+    const user=await client.query("SELECT balance FROM users WHERE telegram_id=$1 FOR UPDATE",[req.telegramUser.id]);const totalPrice=Number(box.price)*count;if(!user.rows[0]||Number(user.rows[0].balance)<totalPrice)throw Object.assign(new Error("Недостаточно Искр для открытия выбранного количества кейсов"),{status:400});
+    const items=await client.query(`SELECT r.*,ci.real_chance FROM case_items ci JOIN rewards r ON r.id=ci.reward_id WHERE ci.case_id=$1 AND r.active=TRUE ORDER BY r.id`,[box.id]);if(!items.rows.length)throw Object.assign(new Error("В этом кейсе пока нет предметов"),{status:400});const sum=items.rows.reduce((a,x)=>a+Number(x.real_chance),0);if(Math.abs(sum-100)>0.01)throw Object.assign(new Error(`Сумма реальных шансов должна быть 100%. Сейчас: ${sum.toFixed(2)}%`),{status:400});
+    await client.query("UPDATE users SET balance=balance-$1,updated_at=NOW() WHERE telegram_id=$2",[totalPrice,req.telegramUser.id]);const rewards=[];
+    for(let i=0;i<count;i++){const roll=Math.random()*100;let acc=0,picked=items.rows[items.rows.length-1];for(const item of items.rows){acc+=Number(item.real_chance);if(roll<acc){picked=item;break;}}await client.query(`INSERT INTO inventory(telegram_id,reward_name,reward_image,reward_value,status,reward_rarity,reward_background) VALUES($1,$2,$3,$4,'Из кейса',$5,$6)`,[req.telegramUser.id,picked.name,picked.image_url,picked.value,picked.rarity,picked.background_color]);await client.query(`INSERT INTO case_openings(telegram_id,case_id,reward_id,reward_name,reward_value) VALUES($1,$2,$3,$4,$5)`,[req.telegramUser.id,box.id,picked.id,picked.name,picked.value]);rewards.push({id:picked.id,name:picked.name,image_url:picked.image_url,value:picked.value,rarity:picked.rarity,background_color:picked.background_color});}
+    await client.query("COMMIT");res.json({ok:true,count,balance:Number(user.rows[0].balance)-totalPrice,rewards});
+  }catch(e){await client.query("ROLLBACK").catch(()=>{});res.status(e.status||500).json({error:e.message||"Не удалось открыть кейсы"});}finally{client.release();}
+});
+
 // Invoice link for Telegram Stars. Balance is NOT credited here: only successful_payment can do that.
 app.post("/api/topup", requireUser, async (req, res) => {
   if (!pool || !BOT_TOKEN) return res.status(503).json({ error: "Пополнение временно недоступно: сервер не настроен" });
@@ -607,6 +556,16 @@ app.post("/api/topup", requireUser, async (req, res) => {
   }
 });
 
+app.get("/api/admin/upgrade-multipliers", requireUser, requireAdmin, async (_req,res) => {
+  try { const r=await pool.query(`SELECT u.telegram_id,u.username,u.first_name,COALESCE(u.upgrader_multiplier,1) AS upgrader_multiplier,COALESCE(SUM(sp.credit_amount),0) AS total_topup FROM users u JOIN star_payments sp ON sp.telegram_id=u.telegram_id GROUP BY u.telegram_id ORDER BY MAX(sp.created_at) DESC`);res.json(r.rows); }
+  catch(e){console.error(e);res.status(500).json({error:"Не удалось загрузить пользователей с пополнениями"});}
+});
+app.put("/api/admin/upgrade-multipliers/:id", requireUser, requireAdmin, async (req,res) => {
+  const multiplier=Number(req.body?.multiplier);if(!Number.isFinite(multiplier)||multiplier<0.1||multiplier>3)return res.status(400).json({error:"Множитель должен быть от 0.1 до 3.0"});
+  try {const r=await pool.query(`UPDATE users SET upgrader_multiplier=$1 WHERE telegram_id=$2 AND EXISTS(SELECT 1 FROM star_payments WHERE telegram_id=$2) RETURNING telegram_id,upgrader_multiplier`,[multiplier,req.params.id]);if(!r.rows[0])return res.status(404).json({error:"Пользователь с пополнением не найден"});res.json({ok:true,...r.rows[0]});}
+  catch(e){console.error(e);res.status(500).json({error:"Не удалось сохранить множитель"});}
+});
+
 app.post("/api/upgrade", requireUser, async (req, res) => {
   if (!pool) return res.status(503).json({ error: "База данных не настроена" });
   const inventoryId=Number(req.body?.inventoryId), rewardId=Number(req.body?.rewardId);
@@ -621,9 +580,12 @@ app.post("/api/upgrade", requireUser, async (req, res) => {
     const stakeItem=stakeResult.rows[0], reward=rewardResult.rows[0];
     if(Number(reward.value)<=Number(stakeItem.reward_value)) throw Object.assign(new Error("Целевой предмет должен быть дороже ставки"),{status:400});
     const displayedChance=Math.min(75,Math.max(0,(Number(stakeItem.reward_value)/Number(reward.value))*100));
-    const loggedChance=displayedChance*0.8;
-    // Outcome uses the exact displayed chance; loggedChance remains lower for internal statistics.
-    const won=Math.random()*100<displayedChance;
+    const userSettings=await client.query("SELECT COALESCE(upgrader_multiplier,1) AS multiplier FROM users WHERE telegram_id=$1",[req.telegramUser.id]);
+    const multiplier=Math.max(0.1,Math.min(3,Number(userSettings.rows[0]?.multiplier||1)));
+    const realChance=Math.min(100,displayedChance*multiplier);
+    const loggedChance=realChance;
+    // UI returns the unchanged displayed chance; the server uses the private multiplier for the actual roll.
+    const won=Math.random()*100<realChance;
     await client.query("UPDATE inventory SET status='Апгрейд использован' WHERE id=$1",[inventoryId]);
     await client.query("INSERT INTO upgrades(telegram_id,stake,reward_id,chance,won) VALUES($1,$2,$3,$4,$5)",[req.telegramUser.id,Number(stakeItem.reward_value),reward.id,loggedChance,won]);
     if(won) await client.query("INSERT INTO inventory(telegram_id,reward_name,reward_image,reward_value,reward_rarity,reward_background) VALUES($1,$2,$3,$4,$5,$6)",[req.telegramUser.id,reward.name,reward.image_url,reward.value,reward.rarity||'обычное',reward.background_color||'#123c2b']);

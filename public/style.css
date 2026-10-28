@@ -74,3 +74,18 @@
 .free-case-controls{display:grid;gap:8px}
 .free-case-controls .primary-btn{margin:0}
 .free-case-standard .case-meta .muted{margin:10px 0 0;font-size:10px;line-height:1.5}
+
+/* Case quantity selector and vertically stacked multi-open reels */
+.case-quantity{display:flex;align-items:center;justify-content:center;gap:8px;margin:12px 0 18px;color:var(--muted,#9aa6a0);font-size:13px}
+.case-quantity button{min-width:42px;height:36px;border:1px solid rgba(130,160,145,.25);border-radius:10px;background:rgba(255,255,255,.045);color:inherit;font-weight:800;cursor:pointer}
+.case-quantity button.selected{background:rgba(49,211,151,.16);border-color:#31d397;color:#31d397}
+.multi-roulette{display:flex;flex-direction:column;gap:12px;width:100%;overflow:hidden}
+.multi-roulette-row{position:relative;overflow:hidden;border-radius:14px;padding:8px 0;background:rgba(0,0,0,.2)}
+.multi-roulette-row .roulette-track{display:flex;gap:8px;will-change:transform}
+.multi-roulette-row .roulette-pointer{position:absolute;z-index:3;left:50%;top:0;transform:translateX(-50%);font-size:12px;color:#fff}
+.multi-prize-results{display:flex;flex-direction:column;gap:12px}
+.multi-prize-results .prize-reveal{padding:14px;display:grid;grid-template-columns:56px 1fr;gap:4px 12px;align-items:center}
+.multi-prize-results .prize-reveal img{width:56px;height:56px;object-fit:contain;grid-row:span 2}
+.multi-prize-results .prize-reveal h3{margin:0}
+.multi-prize-results .prize-value{font-size:13px}
+.admin-entry label{display:flex;align-items:center;gap:5px;color:var(--muted,#9aa6a0);font-size:12px}
