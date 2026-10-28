@@ -137,6 +137,26 @@ async function initDb() {
       reward_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb
     );
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS double_rounds (
+      round_id BIGINT PRIMARY KEY,
+      winning_number INTEGER,
+      winning_color TEXT,
+      started_at TIMESTAMPTZ NOT NULL,
+      settled_at TIMESTAMPTZ
+    );
+    CREATE TABLE IF NOT EXISTS double_bets (
+      id BIGSERIAL PRIMARY KEY,
+      round_id BIGINT NOT NULL REFERENCES double_rounds(round_id),
+      telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+      color TEXT NOT NULL CHECK (color IN ('red','black','green')),
+      amount NUMERIC(18,2) NOT NULL CHECK (amount >= 5),
+      payout NUMERIC(18,2) NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(round_id, telegram_id)
+    );
+    CREATE INDEX IF NOT EXISTS double_bets_round_idx ON double_bets(round_id);
+  `);
   // Safe migrations for existing Railway databases created by earlier versions.
   await pool.query(`
     ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT;
@@ -241,6 +261,18 @@ app.put("/api/admin/free-case", requireUser, requireAdmin, async (req, res) => {
   } catch (error) { res.status(500).json({ error: "Не удалось сохранить содержимое бесплатного кейса" }); }
 });
 
+app.get("/api/free-case/contents", async (_req, res) => {
+  if (!pool) return res.status(503).json({ error: "База данных не настроена" });
+  try {
+    const setting = await getSetting("free_case_reward_ids", { ids: [] });
+    const ids = Array.isArray(setting.ids) ? setting.ids.map(Number).filter(n => Number.isSafeInteger(n) && n > 0) : [];
+    const result = ids.length
+      ? await pool.query("SELECT id,name,image_url,value,rarity FROM rewards WHERE active=TRUE AND id=ANY($1::bigint[]) ORDER BY id", [ids])
+      : await pool.query("SELECT id,name,image_url,value,rarity FROM rewards WHERE active=TRUE ORDER BY id");
+    res.json({ rewards: result.rows });
+  } catch (error) { console.error("Free case contents error:", error); res.status(500).json({ error: "Не удалось загрузить содержимое кейса" }); }
+});
+
 app.get("/api/free-case/status", requireUser, async (req, res) => {
   if (!pool) return res.status(503).json({ error: "База данных не настроена" });
   try {
@@ -280,6 +312,75 @@ app.post("/api/free-case/open", requireUser, async (req, res) => {
 app.get("/api/subscription", requireUser, async (req, res) => {
   try { res.json({ subscribed: await checkSubscription(req.telegramUser.id) }); }
   catch (error) { console.error("Subscription check error:", error); res.status(500).json({ error: "Не удалось проверить подписку" }); }
+});
+
+
+const DOUBLE_ROUND_MS = 30000;
+function doubleColor(n) { return n === 0 ? "green" : (n % 2 ? "red" : "black"); }
+function randomDoubleNumber() {
+  const r = Math.random() * 100;
+  const color = r < 1 ? "green" : r < 50.5 ? "red" : "black";
+  if (color === "green") return 0;
+  const nums = Array.from({length:14}, (_,i)=>i+1).filter(n=>doubleColor(n)===color);
+  return nums[crypto.randomInt(nums.length)];
+}
+async function syncDoubleRounds(client) {
+  const now = Date.now(), currentId = Math.floor(now / DOUBLE_ROUND_MS);
+  await client.query("SELECT pg_advisory_xact_lock(72819042)");
+  // Create the current round and persist the result for each expired round exactly once.
+  await client.query("INSERT INTO double_rounds(round_id,started_at) VALUES($1,$2) ON CONFLICT(round_id) DO NOTHING", [currentId, new Date(currentId*DOUBLE_ROUND_MS)]);
+  const expired = await client.query("SELECT round_id FROM double_rounds WHERE winning_number IS NULL AND round_id < $1 ORDER BY round_id FOR UPDATE", [currentId]);
+  for (const row of expired.rows) {
+    const number = randomDoubleNumber(), color = doubleColor(number);
+    await client.query("UPDATE double_rounds SET winning_number=$1,winning_color=$2,settled_at=NOW() WHERE round_id=$3 AND winning_number IS NULL", [number,color,row.round_id]);
+    const winners = await client.query("SELECT telegram_id,amount,color FROM double_bets WHERE round_id=$1", [row.round_id]);
+    for (const bet of winners.rows) {
+      if (bet.color === color) {
+        const payout = Number(bet.amount) * (color === "green" ? 14 : 2);
+        await client.query("UPDATE double_bets SET payout=$1 WHERE round_id=$2 AND telegram_id=$3", [payout,row.round_id,bet.telegram_id]);
+        await client.query("UPDATE users SET balance=balance+$1,updated_at=NOW() WHERE telegram_id=$2", [payout,bet.telegram_id]);
+      }
+    }
+  }
+  return {currentId, remaining: Math.max(0, Math.ceil(((currentId+1)*DOUBLE_ROUND_MS-now)/1000))};
+}
+app.get("/api/double/state", requireUser, async (req,res) => {
+  if (!pool) return res.status(503).json({error:"База данных не настроена"});
+  const client=await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const round=await syncDoubleRounds(client);
+    const me=await client.query("SELECT balance FROM users WHERE telegram_id=$1",[req.telegramUser.id]);
+    const bets=await client.query(`SELECT color,COUNT(*)::int AS players,COALESCE(SUM(amount),0)::numeric AS total
+      FROM double_bets WHERE round_id=$1 GROUP BY color`,[round.currentId]);
+    const history=await client.query("SELECT winning_number,winning_color FROM double_rounds WHERE winning_number IS NOT NULL ORDER BY round_id DESC LIMIT 10");
+    const mine=await client.query("SELECT color,amount FROM double_bets WHERE round_id=$1 AND telegram_id=$2",[round.currentId,req.telegramUser.id]);
+    await client.query("COMMIT");
+    res.json({roundId:round.currentId,remaining:round.remaining,balance:Number(me.rows[0]?.balance||0),bets:bets.rows,history:history.rows,mine:mine.rows[0]||null});
+  } catch(e){await client.query("ROLLBACK").catch(()=>{});console.error("DOUBLE state:",e);res.status(500).json({error:"Не удалось загрузить DOUBLE"});}
+  finally{client.release();}
+});
+app.post("/api/double/bet", requireUser, async (req,res) => {
+  if (!pool) return res.status(503).json({error:"База данных не настроена"});
+  const color=String(req.body?.color||""), amount=Number(req.body?.amount);
+  if(!["red","black","green"].includes(color)) return res.status(400).json({error:"Выбери цвет ставки"});
+  if(!Number.isFinite(amount)||!Number.isInteger(amount)||amount<5||amount>1000000) return res.status(400).json({error:"Минимальная ставка — 5 Искр"});
+  const client=await pool.connect();
+  try{
+    await client.query("BEGIN");
+    const round=await syncDoubleRounds(client);
+    if(round.remaining<=1) throw Object.assign(new Error("Ставки на этот раунд уже закрыты"),{status:409});
+    const existing=await client.query("SELECT id FROM double_bets WHERE round_id=$1 AND telegram_id=$2 FOR UPDATE",[round.currentId,req.telegramUser.id]);
+    if(existing.rowCount) throw Object.assign(new Error("В этом раунде уже сделана ставка"),{status:409});
+    const user=await client.query("SELECT balance FROM users WHERE telegram_id=$1 FOR UPDATE",[req.telegramUser.id]);
+    if(!user.rows[0]||Number(user.rows[0].balance)<amount) throw Object.assign(new Error("Недостаточно Искр на балансе"),{status:400});
+    await client.query("UPDATE users SET balance=balance-$1,updated_at=NOW() WHERE telegram_id=$2",[amount,req.telegramUser.id]);
+    await client.query("INSERT INTO double_bets(round_id,telegram_id,color,amount) VALUES($1,$2,$3,$4)",[round.currentId,req.telegramUser.id,color,amount]);
+    const balance=await client.query("SELECT balance FROM users WHERE telegram_id=$1",[req.telegramUser.id]);
+    await client.query("COMMIT");
+    res.json({ok:true,roundId:round.currentId,color,amount,balance:Number(balance.rows[0].balance),remaining:round.remaining});
+  }catch(e){await client.query("ROLLBACK").catch(()=>{});res.status(e.status||500).json({error:e.message||"Не удалось принять ставку"});}
+  finally{client.release();}
 });
 
 app.get("/api/me", requireUser, async (req, res) => {

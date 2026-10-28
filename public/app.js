@@ -174,26 +174,142 @@
 })();
 
 
-// DOUBLE: wheel presentation, synthetic public betting feed, and sound effects.
+// DOUBLE: server-authoritative betting, wheel animation and gradual public activity.
 (() => {
   const $ = (s) => document.querySelector(s);
   const colors = ['green','red','black','red','black','red','black','red','black','red','black','red','black','red','black'];
-  const labels = ['0','1','2','3','4','5','6','7','8','9','10','11','12','13','14'];
-  const state = { betColor:null, bets:[], history:[], remaining:30, spinning:false, rotation:0, balance:0, round:1 };
-  const fakeNames = ['m1x','Kira','neo_7','vortex','Lime','shadow','foxxy','Nika','R0man','d3x','Maks','pixel','Luna','ghost','S1mple'];
-  function sound(type='tick') { try { const C=window.AudioContext||window.webkitAudioContext; if(!C)return; const c=new C(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.value=type==='win'?880:type==='start'?520:180;g.gain.setValueAtTime(.0001,c.currentTime);g.gain.exponentialRampToValueAtTime(type==='win'?.12:.045,c.currentTime+.015);g.gain.exponentialRampToValueAtTime(.0001,c.currentTime+(type==='spin'?.07:.22));o.start();o.stop(c.currentTime+(type==='spin'?.08:.23));o.onended=()=>c.close(); } catch {} }
-  function wheelMarkup(){ const wheel=$('#doubleWheel'); if(!wheel||wheel.dataset.numbered)return;wheel.dataset.numbered='1';labels.forEach((n,i)=>{const el=document.createElement('span');el.className='wheel-number '+colors[i];el.textContent=n;el.style.transform=`translate(-50%,-50%) rotate(${i*24}deg) translateY(-${Math.min(window.innerWidth*.34,118)}px) rotate(${-i*24}deg)`;wheel.appendChild(el);}); }
-  function fakeBets(){ const n=1+Math.floor(Math.random()*5);state.bets=[];for(let i=0;i<n;i++){const color=['red','black','green'][Math.floor(Math.random()*3)],amount=5+Math.floor(Math.random()*46);state.bets.push({name:fakeNames[Math.floor(Math.random()*fakeNames.length)],color,amount});} }
-  function renderBets(){ const totals={red:0,black:0,green:0},players={red:new Set(),black:new Set(),green:new Set()};state.bets.forEach(b=>{totals[b.color]+=b.amount;players[b.color].add(b.name)});['red','black','green'].forEach(c=>{$('#'+c+'Players').textContent=players[c].size;$('#'+c+'Total').textContent=totals[c].toLocaleString('ru-RU');});const feed=$('#doubleBetFeed');if(feed)feed.innerHTML=state.bets.map(b=>`<div class="double-feed-row"><div><div class="feed-name"><span class="feed-dot ${b.color}"></span>${b.name}</div><div class="feed-detail">Ставка на ${b.color==='red'?'Красный ×2':b.color==='black'?'Чёрный ×2':'Зелёный ×14'}</div></div><div class="feed-total">${b.amount} ✦</div></div>`).join(''); }
-  function openModal(color){if(state.spinning||state.remaining<2){window.__appToast?.('Ставки закрыты: дождись следующего раунда');return;}state.betColor=color;$('#doubleModalTitle').textContent='Ставка на '+({red:'красное ×2',black:'чёрное ×2',green:'зелёное ×14'}[color]);$('#doubleBalance').textContent=Number(window.__doubleBalance||0).toLocaleString('ru-RU');$('#doubleAmount').value='10';$('#doubleBetModal').classList.remove('hidden');}
-  function placeBet(){const amount=Number($('#doubleAmount').value),balance=Number(window.__doubleBalance||0);if(!Number.isFinite(amount)||amount<5){window.__appToast?.('Минимальная ставка — 5 Искр');return;}if(amount>balance){window.__appToast?.('Недостаточно Искр на балансе');return;}window.__doubleBalance=balance-amount;state.bets.push({name:'Вы',color:state.betColor,amount});renderBets();$('#doubleBetModal').classList.add('hidden');$('#doubleBalance').textContent=window.__doubleBalance;const bal=$('#balance');if(bal)bal.textContent=window.__doubleBalance.toLocaleString('ru-RU');sound('start');window.__appToast?.('Ставка принята в демо-раунде');}
-  function spinRound(){if(state.spinning)return;state.spinning=true;$('#wheelStatus').textContent='КРУТИМ…';$('#roundCountdown').textContent='0';sound('start');const r=Math.random()*100;let winColor=r<1?'green':r<50.5?'red':'black';let winNum;if(winColor==='green')winNum=0;else{const nums=labels.map(Number).filter(n=>n!==0&&colors[n]===winColor);winNum=nums[Math.floor(Math.random()*nums.length)];}const wheel=$('#doubleWheel');const target=360*5+(360-winNum*24-12);state.rotation+=target;wheel.style.transform=`rotate(${state.rotation}deg)`;setTimeout(()=>{const winning=state.bets.filter(b=>b.color===winColor);let won=0;winning.forEach(b=>{const payout=b.amount*(winColor==='green'?14:2);if(b.name==='Вы')won+=payout;});if(won){window.__doubleBalance=Number(window.__doubleBalance||0)+won;const bal=$('#balance');if(bal)bal.textContent=window.__doubleBalance.toLocaleString('ru-RU');sound('win');window.__appToast?.(`Победа! Выплата ${won} Искр`);}else sound('tick');$('#wheelResult').textContent=String(winNum);$('#wheelStatus').textContent='ВЫИГРАЛ '+({red:'КРАСНЫЙ',black:'ЧЁРНЫЙ',green:'ЗЕЛЁНЫЙ'}[winColor]);state.history.unshift({n:winNum,color:winColor});state.history=state.history.slice(0,10);$('#doubleHistory').innerHTML=state.history.map(x=>`<span class="${x.color==='red'?'red-ball':x.color==='green'?'green-ball':''}">${x.n}</span>`).join('');state.spinning=false;state.round++;state.remaining=30;setTimeout(()=>{state.bets=[];fakeBets();renderBets();$('#wheelStatus').textContent='СТАВКИ ОТКРЫТЫ';sound('start');},1200);},5500);}
-  document.addEventListener('click',e=>{const bet=e.target.closest('[data-bet]');if(bet)openModal(bet.dataset.bet);const preset=e.target.closest('[data-preset]');if(preset){const input=$('#doubleAmount'),bal=Number(window.__doubleBalance||0),v=Number(input.value||0);if(preset.dataset.preset==='add')input.value=v+10;else if(preset.dataset.preset==='max')input.value=bal;else input.value=Math.max(5,Math.floor(bal*Number(preset.dataset.preset)/100));}});
-  $('#doubleModalClose')?.addEventListener('click',()=>$('#doubleBetModal').classList.add('hidden'));$('#doubleConfirm')?.addEventListener('click',placeBet);
-  function tick(){if(state.spinning)return;state.remaining--;$('#roundCountdown').textContent=state.remaining;if(state.remaining<=0){spinRound();return;}if(state.remaining<=5)sound('tick');}
-  wheelMarkup(); fakeBets();renderBets();$('#roundCountdown')&&($('#roundCountdown').textContent=state.remaining);setInterval(tick,1000);setInterval(()=>{if(!state.spinning&&state.remaining>10){fakeBets();renderBets();}},9000);
-  // A real Telegram session gets the authoritative subscription and free-case checks from server.js.
-  $('#verifySubscriptionBtn')?.addEventListener('click',async()=>{const status=$('#freeCaseStatus'),btn=$('#openFreeCaseBtn');status.textContent='Проверка подписки…';try{const result=await window.__appApi('/api/subscription');if(result.subscribed){status.textContent='Подписка подтверждена. Можно открыть бесплатный кейс.';btn.disabled=false;btn.textContent='Открыть бесплатный кейс';btn.dataset.verified='1';}else{status.textContent='Подписка не найдена. Подпишись на @BELIVEIN_OG и попробуй снова.';btn.disabled=true;btn.dataset.verified='';}}catch(err){status.textContent=err.message||'Не удалось проверить подписку. Открой Mini App из Telegram.';}});
-  $('#openFreeCaseBtn')?.addEventListener('click',async()=>{const btn=$('#openFreeCaseBtn'),status=$('#freeCaseStatus');if(btn.dataset.verified!=='1'){status.textContent='Сначала нажми Verify Subscription.';return;}btn.disabled=true;status.textContent='Открываем кейс…';try{const result=await window.__appApi('/api/free-case/open',{method:'POST',body:JSON.stringify({})});status.textContent=`Ты получил: ${result.reward.name} · ${result.reward.value} Искр. Следующее открытие через 24 часа.`;btn.textContent='Уже открыт сегодня';btn.dataset.verified='';await window.__appLoadMe?.();}catch(err){status.textContent=err.message;btn.disabled=false;}});
-  window.__doubleBalance=0; window.__appApi?.('/api/me').then(x=>{window.__doubleBalance=Number(x.balance||0);const b=document.querySelector('#doubleBalance');if(b)b.textContent=window.__doubleBalance.toLocaleString('ru-RU');}).catch(()=>{});
+  const labels = Array.from({length:15},(_,i)=>String(i));
+  const state = {color:null,roundId:null,remaining:30,spinning:false,rotation:0,balance:0,bots:[],history:[],audio:null,spinOsc:null,spinGain:null};
+  const nameLabels = {red:'Красный ×2',black:'Чёрный ×2',green:'Зелёный ×14'};
+  function tone(freq=220,duration=.12,volume=.04,type='sine') {
+    try { const C=window.AudioContext||window.webkitAudioContext;if(!C)return;const c=state.audio||(state.audio=new C());if(c.state==='suspended')c.resume();const o=c.createOscillator(),g=c.createGain();o.type=type;o.frequency.value=freq;o.connect(g);g.connect(c.destination);g.gain.setValueAtTime(.0001,c.currentTime);g.gain.exponentialRampToValueAtTime(volume,c.currentTime+.02);g.gain.exponentialRampToValueAtTime(.0001,c.currentTime+duration);o.start();o.stop(c.currentTime+duration+.02);}catch{}
+  }
+  function startSpinSound(){try{const C=window.AudioContext||window.webkitAudioContext;if(!C)return;const c=state.audio||(state.audio=new C());if(c.state==='suspended')c.resume();const o=c.createOscillator(),g=c.createGain();o.type='triangle';o.frequency.value=95;g.gain.value=.012;o.connect(g);g.connect(c.destination);o.start();state.spinOsc=o;state.spinGain=g;}catch{}}
+  function stopSpinSound(){try{if(state.spinOsc){state.spinGain.gain.setTargetAtTime(.0001,state.audio.currentTime,.08);state.spinOsc.stop(state.audio.currentTime+.35);}}catch{}state.spinOsc=null;state.spinGain=null;}
+  function wheelMarkup(){
+    const wheel=$('#doubleWheel');if(!wheel||wheel.dataset.numbered)return;wheel.dataset.numbered='1';
+    labels.forEach((n,i)=>{const el=document.createElement('span');el.className='wheel-number '+colors[i];el.textContent=n;el.style.transform=`translate(-50%,-50%) rotate(${i*24}deg) translateY(-${Math.min(window.innerWidth*.34,118)}px) rotate(180deg)`;wheel.appendChild(el);});
+  }
+  function addBotBet(){
+    if(state.spinning||state.remaining<=3||state.bots.length>=5)return;
+    const green=Math.random()<.025;
+    const color=green?'green':Math.random()<.5?'red':'black';
+    const amount=green?5+Math.floor(Math.random()*6):5+Math.floor(Math.random()*46);
+    state.bots.push({color,amount});
+    renderBets();
+  }
+  function renderBets(serverBets=[]){
+    const totals={red:0,black:0,green:0},players={red:0,black:0,green:0};
+    (serverBets||[]).forEach(b=>{const c=b.color;if(totals[c]!==undefined){totals[c]+=Number(b.total||b.amount||0);players[c]+=Number(b.players||1);}});
+    state.bots.forEach(b=>{totals[b.color]+=b.amount;players[b.color]++;});
+    ['red','black','green'].forEach(c=>{const p=$('#'+c+'Players'),t=$('#'+c+'Total');if(p)p.textContent=players[c];if(t)t.textContent=Math.round(totals[c]).toLocaleString('ru-RU');});
+    const own=serverBets.find(b=>b.mine);if(own){const btn=$(`[data-bet="${own.color}"]`);if(btn)btn.classList.add('own-bet');}
+  }
+  function openModal(color){
+    if(state.spinning||state.remaining<=1){window.__appToast?.('Ставки закрыты — дождись следующего раунда');return;}
+    state.color=color;$('#doubleModalTitle').textContent='Ставка на '+nameLabels[color];
+    $('#doubleBalance').textContent=Number(state.balance).toLocaleString('ru-RU');
+    $('#doubleAmount').value='10';$('#doubleAmount').max=String(state.balance);
+    $('#doubleBetModal').classList.remove('hidden');
+  }
+  async function placeBet(){
+    const amount=Number($('#doubleAmount').value);
+    if(!Number.isInteger(amount)||amount<5){window.__appToast?.('Минимальная ставка — 5 Искр');return;}
+    if(amount>state.balance){window.__appToast?.('Недостаточно Искр на балансе');return;}
+    const confirm=$('#doubleConfirm');confirm.disabled=true;
+    try{
+      const result=await window.__appApi('/api/double/bet',{method:'POST',body:JSON.stringify({color:state.color,amount})});
+      state.balance=Number(result.balance);$('#doubleBalance').textContent=state.balance.toLocaleString('ru-RU');
+      const bal=$('#balance');if(bal)bal.textContent=state.balance.toLocaleString('ru-RU');
+      $('#doubleBetModal').classList.add('hidden');tone(560,.16,.055);
+      window.__appToast?.('Ставка принята');
+      await refreshState();
+    }catch(e){window.__appToast?.(e.message||'Не удалось принять ставку');}
+    finally{confirm.disabled=false;}
+  }
+  function animateResult(number,color){
+    if(state.spinning)return;
+    state.spinning=true;$('#wheelStatus').textContent='КРУТИМ...';$('#wheelResult').textContent='Крутим...';
+    startSpinSound();tone(320,.3,.035,'triangle');
+    const wheel=$('#doubleWheel');
+    const base=Math.ceil((state.rotation+360*5)/360)*360;
+    let target=base-(Number(number)*24);
+    if(target<=state.rotation)target+=360;
+    state.rotation=target;
+    wheel.style.transition='transform 5.4s cubic-bezier(.12,.72,.1,1)';
+    wheel.style.transform=`rotate(${state.rotation}deg)`;
+    setTimeout(()=>{
+      stopSpinSound();tone(color==='green'?980:color==='red'?720:610,.3,.07);
+      $('#wheelResult').textContent=String(number);$('#wheelStatus').textContent='ВЫИГРАЛ '+({red:'КРАСНЫЙ',black:'ЧЁРНЫЙ',green:'ЗЕЛЁНЫЙ'}[color]||'');
+      state.history.unshift({n:number,color});state.history=state.history.slice(0,10);
+      $('#doubleHistory').innerHTML=state.history.map(x=>`<span class="${x.color==='red'?'red-ball':x.color==='green'?'green-ball':''}">${x.n}</span>`).join('');
+      state.spinning=false;state.bots=[];
+      setTimeout(()=>{if(!state.spinning){$('#wheelResult').textContent=String(state.remaining);$('#wheelStatus').textContent='СЕК. ДО ПРОКРУТА';tone(480,.12,.025);}},900);
+    },5500);
+  }
+  async function refreshState(){
+    try{
+      const data=await window.__appApi('/api/double/state');
+      state.balance=Number(data.balance||0);
+      const bal=$('#balance');if(bal)bal.textContent=state.balance.toLocaleString('ru-RU');
+      const oldRound=state.roundId;state.roundId=Number(data.roundId);state.remaining=Number(data.remaining||0);
+      if(oldRound!==null&&oldRound!==state.roundId&&Array.isArray(data.history)&&data.history.length){
+        const last=data.history[0],n=Number(last.winning_number),c=last.winning_color;
+        if(Number.isInteger(n)&&!state.spinning)animateResult(n,c);
+        state.bots=[];
+      }
+      if(!state.spinning){$('#wheelResult').textContent=String(state.remaining);$('#wheelStatus').textContent='СЕК. ДО ПРОКРУТА';}
+      const mine=data.mine;
+      const serverBets=(data.bets||[]).map(b=>({...b,players:Number(b.players),total:Number(b.total)}));
+      if(mine){const row=serverBets.find(x=>x.color===mine.color);if(row)row.mine=true;}
+      renderBets(serverBets);
+      if(!state.history.length&&Array.isArray(data.history)){state.history=data.history.map(x=>({n:Number(x.winning_number),color:x.winning_color}));$('#doubleHistory').innerHTML=state.history.map(x=>`<span class="${x.color==='red'?'red-ball':x.color==='green'?'green-ball':''}">${x.n}</span>`).join('');}
+      document.querySelectorAll('[data-bet]').forEach(b=>b.disabled=state.spinning||state.remaining<=1||!!mine);
+    }catch(e){if(!window.__doubleWarned){window.__doubleWarned=true;window.__appToast?.(e.message||'DOUBLE требует подключённую базу данных');}}
+  }
+  document.addEventListener('click',e=>{
+    const bet=e.target.closest('[data-bet]');if(bet)openModal(bet.dataset.bet);
+    const preset=e.target.closest('[data-preset]');if(preset){const input=$('#doubleAmount'),bal=state.balance,v=Number(input.value||0);if(preset.dataset.preset==='add')input.value=Math.min(bal,v+10);else if(preset.dataset.preset==='max')input.value=bal;else input.value=Math.min(bal,Math.max(5,Math.floor(bal*Number(preset.dataset.preset)/100)));}
+  });
+  $('#doubleModalClose')?.addEventListener('click',()=>$('#doubleBetModal').classList.add('hidden'));
+  $('#doubleConfirm')?.addEventListener('click',placeBet);
+  wheelMarkup();refreshState();
+  setInterval(()=>{if(!state.spinning){state.remaining=Math.max(0,state.remaining-1);if(state.remaining>=0&&state.roundId!==null){$('#wheelResult').textContent=String(state.remaining);$('#wheelStatus').textContent='СЕК. ДО ПРОКРУТА';}if(state.remaining<=0)refreshState();}},1000);
+  setInterval(refreshState,2500);
+  (function scheduleBot(){setTimeout(()=>{addBotBet();scheduleBot();},2200+Math.random()*3800);})();
+  // Free case uses the existing server-side subscription, cooldown and admin-configured reward pool.
+  async function loadFreeCasePreview(){
+    const rail=$('#freeCaseRoulette');if(!rail)return;
+    try{
+      const data=await window.__appApi('/api/free-case/contents');
+      const rewards=Array.isArray(data.rewards)?data.rewards:[];
+      if(!rewards.length){rail.innerHTML='<span>✦</span><span>🎁</span><span>💎</span><span>⚡</span><span>🎁</span>';return;}
+      const strip=Array.from({length:9},(_,i)=>rewards[i%rewards.length]);
+      rail.innerHTML=strip.map(r=>`<span title="${String(r.name||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;')}">${r.image_url?`<img src="${r.image_url}" alt="">`:'✦'}</span>`).join('');
+    }catch{rail.innerHTML='<span>✦</span><span>🎁</span><span>💎</span><span>⚡</span><span>🎁</span>';}
+  }
+  loadFreeCasePreview();
+  $('#verifySubscriptionBtn')?.addEventListener('click',async()=>{
+    const status=$('#freeCaseStatus'),btn=$('#openFreeCaseBtn');status.textContent='Проверка подписки…';
+    try{
+      const [sub,cd]=await Promise.all([window.__appApi('/api/subscription'),window.__appApi('/api/free-case/status')]);
+      if(sub.subscribed){status.textContent=cd.available?'Подписка подтверждена. Можно открыть кейс.':`Кейс уже открыт. Следующее открытие: ${new Date(cd.nextAt).toLocaleString('ru-RU')}`;btn.disabled=!cd.available;btn.textContent=cd.available?'Открыть бесплатный кейс':'Уже открыт сегодня';btn.dataset.verified=cd.available?'1':'';}
+      else{status.textContent='Подписка не найдена. Подпишись на @BELIVEIN_OG и попробуй снова.';btn.disabled=true;btn.dataset.verified='';}
+    }catch(err){status.textContent=err.message||'Не удалось проверить подписку. Открой Mini App из Telegram.';}
+  });
+  $('#openFreeCaseBtn')?.addEventListener('click',async()=>{
+    const btn=$('#openFreeCaseBtn'),status=$('#freeCaseStatus'),rail=$('#freeCaseRoulette');
+    if(btn.dataset.verified!=='1'){status.textContent='Сначала нажми Verify Subscription.';return;}
+    btn.disabled=true;status.textContent='Кейс открывается…';rail?.classList.add('rolling');tone(260,.18,.03);
+    try{
+      const result=await window.__appApi('/api/free-case/open',{method:'POST',body:JSON.stringify({})});
+      setTimeout(()=>{
+        rail?.classList.remove('rolling');
+        if(rail)rail.innerHTML=`<span>${result.reward.image_url?`<img src="${result.reward.image_url}" alt="">`:'✦'}</span><strong>${String(result.reward.name||'Приз')}</strong><b>${Number(result.reward.value||0).toLocaleString('ru-RU')} ✦</b>`;
+        status.textContent=`Выигрыш: ${result.reward.name} · ${result.reward.value} Искр. Следующее открытие через 24 часа.`;
+        btn.textContent='Уже открыт сегодня';btn.dataset.verified='';
+        tone(900,.28,.06);window.__appLoadMe?.();
+      },2200);
+    }catch(err){rail?.classList.remove('rolling');status.textContent=err.message;btn.disabled=false;}
+  });
 })();
