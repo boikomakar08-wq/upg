@@ -42,26 +42,18 @@
   applyTheme(savedTheme);
   $('#themeSelect').addEventListener('change',e=>{applyTheme(e.target.value);toast(e.target.value==='light'?'Светлая тема включена':'Тёмная тема включена');});
 
-  // Quiet ambient soundtrack; starts only after a user gesture (browser autoplay policy).
-  const ambience={ctx:null,nodes:[],enabled:false,volume:.14,timer:null};
-  function stopAmbience(){ambience.enabled=false;if(ambience.timer)clearInterval(ambience.timer);ambience.timer=null;ambience.nodes.forEach(n=>{try{n.stop?.()}catch{}try{n.disconnect?.()}catch{}});ambience.nodes=[];}
-  function startAmbience(){
-    if(ambience.enabled)return;
-    try{
-      const C=window.AudioContext||window.webkitAudioContext;if(!C)return;
-      const ctx=ambience.ctx||(ambience.ctx=new C());ctx.resume();ambience.enabled=true;
-      const master=ctx.createGain();master.gain.value=ambience.volume;master.connect(ctx.destination);ambience.nodes.push(master);
-      const notes=[110,164.81,220,164.81,130.81,196,261.63,196];let step=0;
-      const playNote=()=>{if(!ambience.enabled)return;const now=ctx.currentTime;const osc=ctx.createOscillator(),gain=ctx.createGain(),filter=ctx.createBiquadFilter();osc.type='sine';osc.frequency.value=notes[step++%notes.length];filter.type='lowpass';filter.frequency.value=520;gain.gain.setValueAtTime(.0001,now);gain.gain.linearRampToValueAtTime(.13,now+.5);gain.gain.exponentialRampToValueAtTime(.0001,now+3.4);osc.connect(filter);filter.connect(gain);gain.connect(master);osc.start(now);osc.stop(now+3.5);};
-      playNote();ambience.timer=setInterval(playNote,2700);
-    }catch{}
-  }
-  function setAmbience(enabled,volume){if(Number.isFinite(volume)){ambience.volume=Math.max(0,Math.min(.35,volume));try{localStorage.setItem('belivein-ambience-volume',String(ambience.volume))}catch{}if(ambience.nodes[0])ambience.nodes[0].gain.value=ambience.volume;}if(enabled){try{localStorage.setItem('belivein-ambience-enabled','1')}catch{}startAmbience()}else{try{localStorage.setItem('belivein-ambience-enabled','0')}catch{}stopAmbience()}const toggle=$('#ambienceToggle'),slider=$('#ambienceVolume'),value=$('#ambienceVolumeValue');if(toggle)toggle.checked=ambience.enabled;if(slider)slider.value=String(Math.round(ambience.volume*100));if(value)value.textContent=Math.round(ambience.volume*100)+'%';}
-  try{ambience.volume=Math.max(0,Math.min(.35,Number(localStorage.getItem('belivein-ambience-volume')??.14)));}catch{}
-  try{const toggle=$('#ambienceToggle'),slider=$('#ambienceVolume'),value=$('#ambienceVolumeValue');if(toggle)toggle.checked=localStorage.getItem('belivein-ambience-enabled')==='1';if(slider)slider.value=String(Math.round(ambience.volume*100));if(value)value.textContent=Math.round(ambience.volume*100)+'%';}catch{}
+  // User-provided soundtrack. Enabled by default; browsers may require a first tap to begin playback.
+  const ambience={audio:null,enabled:true,volume:.14};
+  function getSoundtrack(){if(!ambience.audio){ambience.audio=new Audio('/soundtrack.m4a');ambience.audio.loop=true;ambience.audio.preload='auto';ambience.audio.volume=ambience.volume;}return ambience.audio;}
+  async function startAmbience(){if(!ambience.enabled)return;try{const a=getSoundtrack();a.volume=ambience.volume;await a.play();}catch{ /* autoplay policy: retry on the next user gesture */ }}
+  function stopAmbience(){if(ambience.audio)ambience.audio.pause();}
+  function setAmbience(enabled,volume){ambience.enabled=!!enabled;if(Number.isFinite(volume))ambience.volume=Math.max(0,Math.min(.35,volume));try{localStorage.setItem('belivein-ambience-volume',String(ambience.volume));localStorage.setItem('belivein-ambience-enabled',ambience.enabled?'1':'0')}catch{}if(ambience.audio)ambience.audio.volume=ambience.volume;if(ambience.enabled)startAmbience();else stopAmbience();const toggle=$('#ambienceToggle'),slider=$('#ambienceVolume'),value=$('#ambienceVolumeValue');if(toggle)toggle.checked=ambience.enabled;if(slider)slider.value=String(Math.round(ambience.volume*100));if(value)value.textContent=Math.round(ambience.volume*100)+'%';}
+  try{ambience.volume=Math.max(0,Math.min(.35,Number(localStorage.getItem('belivein-ambience-volume')??.14)));ambience.enabled=localStorage.getItem('belivein-ambience-enabled')!=='0';}catch{}
+  try{const toggle=$('#ambienceToggle'),slider=$('#ambienceVolume'),value=$('#ambienceVolumeValue');if(toggle)toggle.checked=ambience.enabled;if(slider)slider.value=String(Math.round(ambience.volume*100));if(value)value.textContent=Math.round(ambience.volume*100)+'%';}catch{}
   $('#ambienceToggle')?.addEventListener('change',e=>setAmbience(e.target.checked,ambience.volume));
   $('#ambienceVolume')?.addEventListener('input',e=>setAmbience(ambience.enabled,Number(e.target.value)/100));
-  document.addEventListener('pointerdown',()=>{let on=false;try{on=localStorage.getItem('belivein-ambience-enabled')==='1'}catch{}if(on&&!ambience.enabled)startAmbience();},{once:true});
+  document.addEventListener('pointerdown',()=>{if(ambience.enabled)startAmbience();},{passive:true});
+  startAmbience();
   // Main-menu promo carousel: automatic every 7 seconds, with native touch/trackpad swiping.
   const promoTrack=$('#promoTrack');let promoTimer=null;
   function advancePromo(){if(!promoTrack||!$('#homePage')||$('#homePage').classList.contains('hidden'))return;const card=promoTrack.querySelector('.promo-card');if(!card)return;const gap=parseFloat(getComputedStyle(promoTrack).gap)||12;const max=promoTrack.scrollWidth-promoTrack.clientWidth;if(promoTrack.scrollLeft>=max-8)promoTrack.scrollTo({left:0,behavior:'smooth'});else promoTrack.scrollBy({left:card.getBoundingClientRect().width+gap,behavior:'smooth'});}
@@ -211,6 +203,8 @@
   const labels = Array.from({length:15},(_,i)=>String(i));
   const state = {active:false,color:null,roundId:null,lastResultRoundId:null,remaining:30,spinning:false,rotation:0,balance:0,bots:[],history:[],audio:null,spinOsc:null,spinGain:null,spinInterval:null};
   const nameLabels = {red:'Красный ×2',black:'Чёрный ×2',green:'Зелёный ×14'};
+  // playSwipe belongs to the main app's private scope; DOUBLE needs its own tick sound.
+  function playSwipe(){tone(950,.045,.018,'triangle');}
   function tone(freq=220,duration=.12,volume=.04,type='sine') {
     try { const C=window.AudioContext||window.webkitAudioContext;if(!C)return;const c=state.audio||(state.audio=new C());if(c.state==='suspended')c.resume();const o=c.createOscillator(),g=c.createGain();o.type=type;o.frequency.value=freq;o.connect(g);g.connect(c.destination);g.gain.setValueAtTime(.0001,c.currentTime);g.gain.exponentialRampToValueAtTime(volume,c.currentTime+.02);g.gain.exponentialRampToValueAtTime(.0001,c.currentTime+duration);o.start();o.stop(c.currentTime+duration+.02);}catch{}
   }
@@ -268,8 +262,11 @@
     const delta=((desired-current)+360)%360;
     const target=state.rotation+360*6+delta;
     state.rotation=target;
+    wheel.style.transition='none';
+    wheel.style.transform=`rotate(${current}deg)`;
+    void wheel.offsetWidth;
     wheel.style.transition='transform 5.4s cubic-bezier(.12,.72,.1,1)';
-    wheel.style.transform=`rotate(${state.rotation}deg)`;
+    wheel.style.transform=`rotate(${target}deg)`;
     setTimeout(()=>{
       stopSpinSound();if(state.active)tone(color==='green'?980:color==='red'?720:610,.3,.07);
       $('#wheelResult').textContent=String(number);$('#wheelStatus').textContent='ВЫИГРАЛ '+({red:'КРАСНЫЙ',black:'ЧЁРНЫЙ',green:'ЗЕЛЁНЫЙ'}[color]||'');
@@ -287,10 +284,14 @@
       const oldRound=state.roundId;state.roundId=Number(data.roundId);state.remaining=Number(data.remaining||0);
       if(Array.isArray(data.history)&&data.history.length){
         const last=data.history[0],resultRound=Number(last.round_id),n=Number(last.winning_number),c=last.winning_color;
-        // Do not lose the spin if a poll arrives while an earlier animation is still running.
-        if(oldRound!==null&&Number.isFinite(resultRound)&&(state.lastResultRoundId===null||resultRound>state.lastResultRoundId)&&!state.spinning){
+        // Establish the latest historical result as a baseline on first load; animate only new results.
+        if(state.lastResultRoundId===null && Number.isFinite(resultRound)) {
           state.lastResultRoundId=resultRound;
-          if(Number.isInteger(n))animateResult(n,c);
+          state.history=data.history.map(x=>({n:Number(x.winning_number),color:x.winning_color}));
+          $('#doubleHistory').innerHTML=state.history.map(x=>`<span class="${x.color==='red'?'red-ball':x.color==='green'?'green-ball':''}">${x.n}</span>`).join('');
+        } else if(Number.isFinite(resultRound) && resultRound>state.lastResultRoundId && !state.spinning) {
+          state.lastResultRoundId=resultRound;
+          if(Number.isInteger(n) && Number.isFinite(state.rotation)) animateResult(n,c);
           state.bots=[];
         }
       }
