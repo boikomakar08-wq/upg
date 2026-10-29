@@ -56,3 +56,9 @@ Telegram Mini App на Node.js / Express 5 с PostgreSQL.
 - DOUBLE отслеживает новые завершённые раунды и запускает анимацию колеса один раз на новый результат.
 - Рекламный слайдер игр перенесён в начало главной страницы; добавлены более насыщенные световые заставки для DOUBLE, кейсов и UPGRADER.
 - Пользовательский саундтрек хранится в `public/soundtrack.m4a`, по умолчанию включён для новых пользователей; настройки громкости и выключения сохраняются. Браузер может начать воспроизведение после первого действия пользователя из-за ограничений autoplay.
+
+## UI polish update
+- Compact gold Sparks balance chip is shown in the top bar across all pages.
+- Brighter gradients and smoother page entrance transitions.
+- User-provided cape/wind swipe sound is stored at `public/swipe-whoosh.mp3` and plays when navigating between sections.
+- Upgrader indicator rests at the bottom of the chance ring, aligned with the vertical axis.

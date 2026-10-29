@@ -125,3 +125,16 @@ body:before{content:"";position:fixed;inset:-20%;z-index:-1;pointer-events:none;
 .double-heading{padding:18px 18px 12px;border-radius:22px;background:radial-gradient(ellipse at 85% 30%,rgba(255,54,87,.16),transparent 40%),linear-gradient(120deg,rgba(13,35,39,.9),rgba(31,16,36,.86));border:1px solid rgba(255,255,255,.09);margin-bottom:16px}
 @keyframes coverTurn{to{transform:rotate(360deg)}}@keyframes orbBreath{0%,100%{transform:scale(1)}50%{transform:scale(1.045)}}
 @media(prefers-reduced-motion:reduce){.promo-card:before,.promo-symbol,.hero-orb,.hero-glow,.detail-hero:before,.cover-art{animation:none}}
+
+/* BELIVEIN brighter polish, compact gold balance chip and smooth page transitions */
+:root{--accent:#4be891;--accent2:#1b9b5a;--line:rgba(173,245,199,.17)}
+body{background:radial-gradient(ellipse at 50% -15%,#16452d 0%,var(--bg) 54%);}
+.topbar{gap:10px}.top-balance{margin-left:auto;display:flex;align-items:center;gap:5px;max-width:116px;min-width:0;padding:8px 10px;border:1px solid #f4c84d;border-radius:11px;background:linear-gradient(135deg,#493a12a8,#171d13);box-shadow:0 0 14px #f4c84d1c,inset 0 0 9px #f4c84d0b;color:#ffe38a;font-size:11px;font-weight:850;font-variant-numeric:tabular-nums;white-space:nowrap}.top-balance span{overflow:hidden;text-overflow:ellipsis}.top-balance b{color:#ffd24e;font-size:13px}.topbar .icon-btn{margin-left:0;flex-shrink:0}
+.page-panel{animation:pageEnter .32s cubic-bezier(.2,.75,.25,1) both;will-change:transform,opacity}.page-panel.hidden{display:none!important;animation:none}@keyframes pageEnter{from{opacity:.15;transform:translateX(18px);filter:brightness(.82)}to{opacity:1;transform:translateX(0);filter:brightness(1)}}
+button,.feature-card,.game-list-card,.promo-card,.double-bet{transition:transform .2s ease,filter .22s ease,box-shadow .22s ease,border-color .22s ease}button:active{filter:brightness(1.14)}.feature-card,.game-list-card,.balance-card,.form-card{box-shadow:0 8px 28px #0002}.promo-card,.upgrader-cover{filter:saturate(1.14) brightness(1.07)}.hero-orb{animation:orbGlow 6s ease-in-out infinite alternate}@keyframes orbGlow{from{filter:hue-rotate(-8deg) brightness(.95);box-shadow:0 0 35px #21c86a22}to{filter:hue-rotate(12deg) brightness(1.12);box-shadow:0 0 65px #21c86a44}}
+/* The upgrader hit marker sits at the bottom at rest, centred on the vertical axis. */
+.upgrade-meter .chance-spin-pointer{top:auto;bottom:-5px;transform-origin:2px -77px;transform:rotate(180deg)}
+.upgrade-meter .chance-spin-pointer.spinning{animation-name:upgradePointerSpinBottom}
+@keyframes upgradePointerSpinBottom{from{transform:rotate(180deg)}to{transform:rotate(var(--spin-end, 2700deg))}}
+@media(max-width:380px){.topbar{gap:7px}.top-balance{padding:7px 7px;font-size:10px;max-width:96px}.brand b{font-size:12px}.brand span{letter-spacing:1.5px}}
+@media(prefers-reduced-motion:reduce){.page-panel{animation:none}.hero-orb{animation:none}}
