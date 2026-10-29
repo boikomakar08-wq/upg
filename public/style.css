@@ -141,10 +141,13 @@ button,.feature-card,.game-list-card,.promo-card,.double-bet{transition:transfor
 
 /* v7: bottom-nav-only whoosh and fixed bottom upgrader hit marker */
 .upgrade-meter .chance-ring{background:transparent!important;isolation:isolate;}
-.upgrade-meter .chance-ring:after{content:"";position:absolute;inset:0;border-radius:50%;z-index:0;background:conic-gradient(var(--accent) var(--chance),var(--line) 0);transform:rotate(var(--ring-end,0deg));transition:transform 3.9s cubic-bezier(.08,.72,.08,1);will-change:transform;}
+/* Static winning arc is centred at the bottom; only the pointer rotates. */
+.upgrade-meter .chance-ring:after{content:"";position:absolute;inset:0;border-radius:50%;z-index:0;background:conic-gradient(from 180deg,var(--accent) var(--chance),var(--line) 0);pointer-events:none;}
 .upgrade-meter .chance-ring:before{z-index:1;}
 .upgrade-meter .chance-ring>div{position:relative;z-index:2;}
-.upgrade-meter .chance-spin-pointer{top:auto!important;bottom:-5px!important;left:calc(50% - 2px);z-index:4;transform-origin:2px -77px!important;transform:rotate(180deg)!important;animation:none!important;}
-.upgrade-meter .chance-ring.chance-spinning:after{transition:transform 3.9s cubic-bezier(.08,.72,.08,1);}
-@media(max-width:380px){.upgrade-meter .chance-spin-pointer{transform-origin:2px -68px!important;}}
-@media(prefers-reduced-motion:reduce){.upgrade-meter .chance-ring:after{transition-duration:.2s!important;}}
+.upgrade-meter .chance-spin-pointer{top:-5px!important;bottom:auto!important;left:calc(50% - 2px);z-index:4;transform-origin:2px 96px!important;transform:rotate(0deg);animation:none!important;will-change:transform;}
+.upgrade-meter .chance-spin-pointer.spinning{animation:upgradePointerSpin 3.9s cubic-bezier(.08,.72,.08,1) forwards!important;}
+@media(max-width:380px){.upgrade-meter .chance-spin-pointer{transform-origin:2px 87px!important;}}
+@media(prefers-reduced-motion:reduce){.upgrade-meter .chance-spin-pointer.spinning{animation-duration:.2s!important;}}
+
+.upgrade-slot-button:disabled{opacity:.65;pointer-events:none;filter:saturate(.65)}
