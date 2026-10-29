@@ -289,7 +289,7 @@ app.get("/api/double/state", requireUser, async (req,res) => {
     const me=await client.query("SELECT balance FROM users WHERE telegram_id=$1",[req.telegramUser.id]);
     const bets=await client.query(`SELECT color,COUNT(*)::int AS players,COALESCE(SUM(amount),0)::numeric AS total
       FROM double_bets WHERE round_id=$1 GROUP BY color`,[round.currentId]);
-    const history=await client.query("SELECT winning_number,winning_color FROM double_rounds WHERE winning_number IS NOT NULL ORDER BY round_id DESC LIMIT 10");
+    const history=await client.query("SELECT round_id,winning_number,winning_color FROM double_rounds WHERE winning_number IS NOT NULL ORDER BY round_id DESC LIMIT 10");
     const mine=await client.query("SELECT color,amount FROM double_bets WHERE round_id=$1 AND telegram_id=$2",[round.currentId,req.telegramUser.id]);
     await client.query("COMMIT");
     res.json({roundId:round.currentId,remaining:round.remaining,balance:Number(me.rows[0]?.balance||0),bets:bets.rows,history:history.rows,mine:mine.rows[0]||null});

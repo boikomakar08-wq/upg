@@ -42,6 +42,32 @@
   applyTheme(savedTheme);
   $('#themeSelect').addEventListener('change',e=>{applyTheme(e.target.value);toast(e.target.value==='light'?'Светлая тема включена':'Тёмная тема включена');});
 
+  // Quiet ambient soundtrack; starts only after a user gesture (browser autoplay policy).
+  const ambience={ctx:null,nodes:[],enabled:false,volume:.14,timer:null};
+  function stopAmbience(){ambience.enabled=false;if(ambience.timer)clearInterval(ambience.timer);ambience.timer=null;ambience.nodes.forEach(n=>{try{n.stop?.()}catch{}try{n.disconnect?.()}catch{}});ambience.nodes=[];}
+  function startAmbience(){
+    if(ambience.enabled)return;
+    try{
+      const C=window.AudioContext||window.webkitAudioContext;if(!C)return;
+      const ctx=ambience.ctx||(ambience.ctx=new C());ctx.resume();ambience.enabled=true;
+      const master=ctx.createGain();master.gain.value=ambience.volume;master.connect(ctx.destination);ambience.nodes.push(master);
+      const notes=[110,164.81,220,164.81,130.81,196,261.63,196];let step=0;
+      const playNote=()=>{if(!ambience.enabled)return;const now=ctx.currentTime;const osc=ctx.createOscillator(),gain=ctx.createGain(),filter=ctx.createBiquadFilter();osc.type='sine';osc.frequency.value=notes[step++%notes.length];filter.type='lowpass';filter.frequency.value=520;gain.gain.setValueAtTime(.0001,now);gain.gain.linearRampToValueAtTime(.13,now+.5);gain.gain.exponentialRampToValueAtTime(.0001,now+3.4);osc.connect(filter);filter.connect(gain);gain.connect(master);osc.start(now);osc.stop(now+3.5);};
+      playNote();ambience.timer=setInterval(playNote,2700);
+    }catch{}
+  }
+  function setAmbience(enabled,volume){if(Number.isFinite(volume)){ambience.volume=Math.max(0,Math.min(.35,volume));try{localStorage.setItem('belivein-ambience-volume',String(ambience.volume))}catch{}if(ambience.nodes[0])ambience.nodes[0].gain.value=ambience.volume;}if(enabled){try{localStorage.setItem('belivein-ambience-enabled','1')}catch{}startAmbience()}else{try{localStorage.setItem('belivein-ambience-enabled','0')}catch{}stopAmbience()}const toggle=$('#ambienceToggle'),slider=$('#ambienceVolume'),value=$('#ambienceVolumeValue');if(toggle)toggle.checked=ambience.enabled;if(slider)slider.value=String(Math.round(ambience.volume*100));if(value)value.textContent=Math.round(ambience.volume*100)+'%';}
+  try{ambience.volume=Math.max(0,Math.min(.35,Number(localStorage.getItem('belivein-ambience-volume')??.14)));}catch{}
+  try{const toggle=$('#ambienceToggle'),slider=$('#ambienceVolume'),value=$('#ambienceVolumeValue');if(toggle)toggle.checked=localStorage.getItem('belivein-ambience-enabled')==='1';if(slider)slider.value=String(Math.round(ambience.volume*100));if(value)value.textContent=Math.round(ambience.volume*100)+'%';}catch{}
+  $('#ambienceToggle')?.addEventListener('change',e=>setAmbience(e.target.checked,ambience.volume));
+  $('#ambienceVolume')?.addEventListener('input',e=>setAmbience(ambience.enabled,Number(e.target.value)/100));
+  document.addEventListener('pointerdown',()=>{let on=false;try{on=localStorage.getItem('belivein-ambience-enabled')==='1'}catch{}if(on&&!ambience.enabled)startAmbience();},{once:true});
+  // Main-menu promo carousel: automatic every 7 seconds, with native touch/trackpad swiping.
+  const promoTrack=$('#promoTrack');let promoTimer=null;
+  function advancePromo(){if(!promoTrack||!$('#homePage')||$('#homePage').classList.contains('hidden'))return;const card=promoTrack.querySelector('.promo-card');if(!card)return;const gap=parseFloat(getComputedStyle(promoTrack).gap)||12;const max=promoTrack.scrollWidth-promoTrack.clientWidth;if(promoTrack.scrollLeft>=max-8)promoTrack.scrollTo({left:0,behavior:'smooth'});else promoTrack.scrollBy({left:card.getBoundingClientRect().width+gap,behavior:'smooth'});}
+  function resetPromoTimer(){if(promoTimer)clearInterval(promoTimer);promoTimer=setInterval(advancePromo,7000);}
+  promoTrack?.addEventListener('pointerdown',()=>{if(promoTimer)clearInterval(promoTimer)});promoTrack?.addEventListener('pointerup',resetPromoTimer);promoTrack?.addEventListener('touchend',resetPromoTimer,{passive:true});resetPromoTimer();
+
   function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
   function escapeAttr(v){return escapeHtml(v);}
   function money(v){return Number(v||0).toLocaleString('ru-RU',{maximumFractionDigits:2});}
@@ -183,7 +209,7 @@
   const $ = (s) => document.querySelector(s);
   const colors = ['green','red','black','red','black','red','black','red','black','red','black','red','black','red','black'];
   const labels = Array.from({length:15},(_,i)=>String(i));
-  const state = {active:false,color:null,roundId:null,remaining:30,spinning:false,rotation:0,balance:0,bots:[],history:[],audio:null,spinOsc:null,spinGain:null,spinInterval:null};
+  const state = {active:false,color:null,roundId:null,lastResultRoundId:null,remaining:30,spinning:false,rotation:0,balance:0,bots:[],history:[],audio:null,spinOsc:null,spinGain:null,spinInterval:null};
   const nameLabels = {red:'Красный ×2',black:'Чёрный ×2',green:'Зелёный ×14'};
   function tone(freq=220,duration=.12,volume=.04,type='sine') {
     try { const C=window.AudioContext||window.webkitAudioContext;if(!C)return;const c=state.audio||(state.audio=new C());if(c.state==='suspended')c.resume();const o=c.createOscillator(),g=c.createGain();o.type=type;o.frequency.value=freq;o.connect(g);g.connect(c.destination);g.gain.setValueAtTime(.0001,c.currentTime);g.gain.exponentialRampToValueAtTime(volume,c.currentTime+.02);g.gain.exponentialRampToValueAtTime(.0001,c.currentTime+duration);o.start();o.stop(c.currentTime+duration+.02);}catch{}
@@ -236,9 +262,11 @@
     state.spinning=true;$('#wheelStatus').textContent='КРУТИМ...';$('#wheelResult').textContent='Крутим...';
     startSpinSound();tone(320,.3,.035,'triangle');
     const wheel=$('#doubleWheel');
-    const base=Math.ceil((state.rotation+360*5)/360)*360;
-    let target=base-(Number(number)*24);
-    if(target<=state.rotation)target+=360;
+    // Keep the wheel rotation continuous, but align the server's winning segment exactly under the pointer.
+    const current=((state.rotation%360)+360)%360;
+    const desired=((360-(Number(number)*24))%360+360)%360;
+    const delta=((desired-current)+360)%360;
+    const target=state.rotation+360*6+delta;
     state.rotation=target;
     wheel.style.transition='transform 5.4s cubic-bezier(.12,.72,.1,1)';
     wheel.style.transform=`rotate(${state.rotation}deg)`;
@@ -257,17 +285,21 @@
       state.balance=Number(data.balance||0);
       const bal=$('#balance');if(bal)bal.textContent=state.balance.toLocaleString('ru-RU');
       const oldRound=state.roundId;state.roundId=Number(data.roundId);state.remaining=Number(data.remaining||0);
-      if(oldRound!==null&&oldRound!==state.roundId&&Array.isArray(data.history)&&data.history.length){
-        const last=data.history[0],n=Number(last.winning_number),c=last.winning_color;
-        if(Number.isInteger(n)&&!state.spinning)animateResult(n,c);
-        state.bots=[];
+      if(Array.isArray(data.history)&&data.history.length){
+        const last=data.history[0],resultRound=Number(last.round_id),n=Number(last.winning_number),c=last.winning_color;
+        // Do not lose the spin if a poll arrives while an earlier animation is still running.
+        if(oldRound!==null&&Number.isFinite(resultRound)&&(state.lastResultRoundId===null||resultRound>state.lastResultRoundId)&&!state.spinning){
+          state.lastResultRoundId=resultRound;
+          if(Number.isInteger(n))animateResult(n,c);
+          state.bots=[];
+        }
       }
       if(!state.spinning){$('#wheelResult').textContent=String(state.remaining);$('#wheelStatus').textContent='СЕК. ДО ПРОКРУТА';}
       const mine=data.mine;
       const serverBets=(data.bets||[]).map(b=>({...b,players:Number(b.players),total:Number(b.total)}));
       if(mine){const row=serverBets.find(x=>x.color===mine.color);if(row)row.mine=true;}
       renderBets(serverBets);
-      if(!state.history.length&&Array.isArray(data.history)){state.history=data.history.map(x=>({n:Number(x.winning_number),color:x.winning_color}));$('#doubleHistory').innerHTML=state.history.map(x=>`<span class="${x.color==='red'?'red-ball':x.color==='green'?'green-ball':''}">${x.n}</span>`).join('');}
+      if(!state.history.length&&Array.isArray(data.history)){state.history=data.history.map(x=>({n:Number(x.winning_number),color:x.winning_color}));if(data.history[0]&&state.lastResultRoundId===null)state.lastResultRoundId=Number(data.history[0].round_id); $('#doubleHistory').innerHTML=state.history.map(x=>`<span class="${x.color==='red'?'red-ball':x.color==='green'?'green-ball':''}">${x.n}</span>`).join('');}
       document.querySelectorAll('[data-bet]').forEach(b=>b.disabled=state.spinning||state.remaining<=1||!!mine);
     }catch(e){if(!window.__doubleWarned){window.__doubleWarned=true;window.__appToast?.(e.message||'DOUBLE требует подключённую базу данных');}}
   }
