@@ -19,9 +19,9 @@
   function icons(){ if(window.lucide) lucide.createIcons(); }
   let currentPage = 'home';
   const swipeAudio = new Audio('/swipe-whoosh.mp3'); swipeAudio.preload='auto'; swipeAudio.volume=.22;
-  function playPageSwipe(){try{swipeAudio.currentTime=0;const a=swipeAudio.cloneNode();a.volume=.22;a.play().catch(()=>{});}catch{}}
+  function playPageSwipe(){try{const a=swipeAudio.cloneNode();a.volume=.095;a.playbackRate=3;a.preservesPitch=false;a.play().catch(()=>{});}catch{}}
   function showPage(page) {
-    if(page!==currentPage){playPageSwipe();currentPage=page;}
+    if(page!==currentPage){currentPage=page;}
     if(page!=='double') window.__stopDoubleSound?.();
     const pages=['home','cases','caseDetail','games','double','upgrader','topup','inventory','profile','settings','admin'];
     pages.forEach(p=>$('#'+p+'Page')?.classList.toggle('hidden',p!==page));
@@ -33,6 +33,8 @@
     if(page==='admin' && isAdmin) refreshAdmin();
     window.scrollTo({top:0,behavior:'smooth'}); icons();
   }
+  // Whoosh is intentionally limited to the five persistent bottom navigation tabs.
+  $$('.bottom-nav .nav-item').forEach(b=>b.addEventListener('click',()=>{if(b.dataset.page!==currentPage)playPageSwipe();}));
   $$('[data-page]').forEach(b=>b.addEventListener('click',()=>showPage(b.dataset.page)));
   $('#profileBtn').addEventListener('click',()=>showPage('profile'));
 
@@ -161,7 +163,7 @@
   $('#upgradeTargetItems').addEventListener('change',e=>{if(e.target.matches('input[name="upgradeTargetItem"]')){ $('#upgradeReward').value=e.target.value;updateUpgradePreview(); }});
   $$('[data-chance]').forEach(b=>b.addEventListener('click',()=>chooseClosestTarget(Number(b.dataset.chance))));
   $$('[data-multiplier]').forEach(b=>b.addEventListener('click',()=>chooseMultiplier(Number(b.dataset.multiplier))));
-  $('#upgradeBtn').addEventListener('click',async()=>{const target=selectedTarget(),stake=selectedStake(),rewardId=Number(target?.id),inventoryId=Number(stake?.id);if(!rewardId||!inventoryId){toast('Кликни на оба слота и выбери предметы');return;}if(Number(target.value)<=Number(stake.value)){toast('Целевой предмет должен быть дороже ставки');return;}const btn=$('#upgradeBtn');btn.disabled=true;$('#upgradeResult').classList.add('hidden');try{const r=await api('/api/upgrade',{method:'POST',body:JSON.stringify({rewardId,inventoryId})});const pointer=$('#upgradeSpinPointer'),ring=$('#chanceRing');const chance=Number(r.chance??targetChance(stake,target));const endAngle=r.won?Math.random()*Math.max(.2,chance*3.6):chance*3.6+Math.random()*Math.max(.2,360-chance*3.6);pointer.classList.remove('spinning');pointer.style.setProperty('--spin-end','0deg');void pointer.offsetWidth;pointer.style.setProperty('--spin-end',`${360*7+endAngle+180}deg`);pointer.classList.add('spinning');await new Promise(resolve=>setTimeout(resolve,3900));pointer.classList.remove('spinning');pointer.style.transform=`rotate(${endAngle+180}deg)`;if(r.won){playWin();playFirework();confetti(ring);}else playTone(170,.3,'sawtooth',.04);$('#upgradeResult').classList.remove('hidden');$('#upgradeResult').innerHTML=`<div style="text-align:center"><b>${r.won?'Успех! Ты получил предмет 🎉':'В этот раз не повезло'}</b><p>${escapeHtml(r.reward.name)} · Ценность: ${money(r.reward.value)} Искр</p></div>`;await window.__appLoadMe?.();}catch(e){toast(e.message);}finally{btn.disabled=false;}});
+  $('#upgradeBtn').addEventListener('click',async()=>{const target=selectedTarget(),stake=selectedStake(),rewardId=Number(target?.id),inventoryId=Number(stake?.id);if(!rewardId||!inventoryId){toast('Кликни на оба слота и выбери предметы');return;}if(Number(target.value)<=Number(stake.value)){toast('Целевой предмет должен быть дороже ставки');return;}const btn=$('#upgradeBtn');btn.disabled=true;$('#upgradeResult').classList.add('hidden');try{const r=await api('/api/upgrade',{method:'POST',body:JSON.stringify({rewardId,inventoryId})});const pointer=$('#upgradeSpinPointer'),ring=$('#chanceRing');const chance=Number(r.chance??targetChance(stake,target));const endAngle=r.won?Math.random()*Math.max(.2,chance*3.6):chance*3.6+Math.random()*Math.max(.2,360-chance*3.6);ring.style.setProperty('--ring-end','0deg');ring.classList.remove('chance-spinning');void ring.offsetWidth;ring.style.setProperty('--ring-end',`${360*7+endAngle}deg`);ring.classList.add('chance-spinning');await new Promise(resolve=>setTimeout(resolve,3900));ring.classList.remove('chance-spinning');ring.style.setProperty('--ring-end',`${endAngle}deg`);if(r.won){playWin();playFirework();confetti(ring);}else playTone(170,.3,'sawtooth',.04);$('#upgradeResult').classList.remove('hidden');$('#upgradeResult').innerHTML=`<div style="text-align:center"><b>${r.won?'Успех! Ты получил предмет 🎉':'В этот раз не повезло'}</b><p>${escapeHtml(r.reward.name)} · Ценность: ${money(r.reward.value)} Искр</p></div>`;await window.__appLoadMe?.();}catch(e){toast(e.message);}finally{btn.disabled=false;}});
 
   async function imageData(file){
     if(!file)return null;if(!file.type.startsWith('image/'))throw new Error('Выбери файл изображения');
