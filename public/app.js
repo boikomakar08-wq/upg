@@ -122,9 +122,9 @@
   function caseCard(c){return `<article class="case-card" data-case-id="${c.id}"><div class="case-art">${c.image_url?`<img src="${escapeAttr(c.image_url)}" alt="">`:'<i class="case-glyph" data-lucide="package-open"></i>'}</div><div class="case-meta"><b>${escapeHtml(c.name)}</b><p>${escapeHtml(c.description||`${c.item_count||0} предметов внутри`)}</p><div class="case-bottom"><span class="case-price">${money(c.price)} Искр</span><button class="mini-btn" data-open-case="${c.id}">Открыть</button></div></div></article>`;}
   let audioCtx=null; function audio(){if(!audioCtx)audioCtx=new (window.AudioContext||window.webkitAudioContext)();if(audioCtx.state==='suspended')audioCtx.resume();return audioCtx;}
   function playTone(freq,duration,type='sine',volume=.035,delay=0){try{const ctx=audio(),osc=ctx.createOscillator(),gain=ctx.createGain();osc.type=type;osc.frequency.setValueAtTime(freq,ctx.currentTime+delay);gain.gain.setValueAtTime(volume,ctx.currentTime+delay);gain.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+delay+duration);osc.connect(gain);gain.connect(ctx.destination);osc.start(ctx.currentTime+delay);osc.stop(ctx.currentTime+delay+duration);}catch{}}
-  const upgradeWinAudio=new Audio('/upgrade-success.mp3'); upgradeWinAudio.preload='auto'; upgradeWinAudio.volume=.36;
+  const upgradeWinAudio=new Audio('/upgrade-success.mp3'); upgradeWinAudio.preload='auto'; upgradeWinAudio.volume=.14;
   const inventorySellAudio=new Audio('/inventory-sell.mp3'); inventorySellAudio.preload='auto'; inventorySellAudio.volume=.68;
-  const taskRewardAudio=new Audio('/task-reward.mp3'); taskRewardAudio.preload='auto'; taskRewardAudio.volume=.5;
+  const taskRewardAudio=new Audio('/task-reward.mp3'); taskRewardAudio.preload='auto'; taskRewardAudio.volume=.20;
   function playAssetSound(a){try{a.pause();a.currentTime=0;const p=a.play();p?.catch(()=>{});}catch{}}
   let caseTickIndex=0; function playCaseTick(){const n=caseTickIndex++;playTone(1180-(n%7)*38,.032,'triangle',.026);playTone(620-(n%5)*24,.055,'sine',.012,.012);}
   document.addEventListener('click',e=>{if(e.target.closest('button,a,[role=button]'))playTone(680,.05,'sine',.012);});
@@ -237,20 +237,31 @@
   function tone(freq=220,duration=.12,volume=.04,type='sine') {
     try { const C=window.AudioContext||window.webkitAudioContext;if(!C)return;const c=state.audio||(state.audio=new C());if(c.state==='suspended')c.resume();const o=c.createOscillator(),g=c.createGain();o.type=type;o.frequency.value=freq;o.connect(g);g.connect(c.destination);g.gain.setValueAtTime(.0001,c.currentTime);g.gain.exponentialRampToValueAtTime(volume,c.currentTime+.02);g.gain.exponentialRampToValueAtTime(.0001,c.currentTime+duration);o.start();o.stop(c.currentTime+duration+.02);}catch{}
   }
-  function startSpinSound(elapsed=0){
-    if(!state.active||!document.querySelector('#doublePage:not(.hidden)'))return;
+  // A short tick is fired for every 24-degree sector crossing under the fixed pointer.
+  function playSectorTick(){tone(1480,.024,.032,'square');tone(760,.018,.012,'triangle');}
+  function startSpinSound(wheel,visibleStart,duration){
     stopSpinSound();
-    try{
-      const a=state.spinAudio||(state.spinAudio=new Audio('/double-wheel-spin.mp3'));
-      a.loop=true;a.volume=.42;a.playbackRate=1.35;
-      a.currentTime=(elapsed/1000)%1.1;
-      const p=a.play();p?.catch(()=>{});
-      const start=performance.now()-elapsed;
-      const ramp=()=>{if(!state.spinning)return;const p=Math.min(1,(performance.now()-start)/state.spinDuration);a.playbackRate=1.35-.78*p;if(p<1)state.spinRaf=requestAnimationFrame(ramp);};
-      state.spinRaf=requestAnimationFrame(ramp);
-    }catch{}
+    if(!state.active||!document.querySelector('#doublePage:not(.hidden)'))return;
+    let lastNorm=((visibleStart%360)+360)%360;
+    let travelled=visibleStart;
+    let lastSector=Math.floor(travelled/24);
+    const started=performance.now();
+    const tickFrame=()=>{
+      if(!state.spinning||!state.active)return;
+      const transform=getComputedStyle(wheel).transform;
+      let norm=lastNorm;
+      if(transform&&transform!=='none'){
+        try{const m=new DOMMatrixReadOnly(transform);norm=(Math.atan2(m.b,m.a)*180/Math.PI+360)%360;}catch{}
+      }
+      const delta=(norm-lastNorm+360)%360;
+      if(delta<180){travelled+=delta;const sector=Math.floor((travelled+0.0001)/24);for(let i=lastSector;i<sector;i++)playSectorTick();lastSector=sector;}
+      lastNorm=norm;
+      if(performance.now()-started<duration+80)state.spinRaf=requestAnimationFrame(tickFrame);
+      else state.spinRaf=0;
+    };
+    state.spinRaf=requestAnimationFrame(tickFrame);
   }
-  function stopSpinSound(){if(state.spinRaf)cancelAnimationFrame(state.spinRaf);state.spinRaf=0;if(state.spinAudio){try{state.spinAudio.pause();state.spinAudio.currentTime=0;}catch{}}}
+  function stopSpinSound(){if(state.spinRaf)cancelAnimationFrame(state.spinRaf);state.spinRaf=0;}
   function wheelMarkup(){
     const wheel=$('#doubleWheel');if(!wheel||wheel.dataset.numbered)return;wheel.dataset.numbered='1';
     labels.forEach((n,i)=>{const el=document.createElement('span');el.className='wheel-number '+colors[i];el.textContent=n;el.style.transform=`translate(-50%,-50%) rotate(${i*24}deg) translateY(-${Math.min(window.innerWidth*.34,118)}px) rotate(180deg)`;wheel.appendChild(el);});
@@ -296,7 +307,7 @@
     if(state.spinning)return;
     state.spinning=true;$('#wheelStatus').textContent='КРУТИМ...';$('#wheelResult').textContent='Крутим...';
     elapsed=Math.max(0,Math.min(state.spinDuration-100,Number(elapsed)||0));
-    startSpinSound(elapsed);tone(320,.3,.035,'triangle');
+    tone(320,.3,.025,'triangle');
     const wheel=$('#doubleWheel');
     // Keep the wheel rotation continuous, but align the server's winning segment exactly under the pointer.
     const current=((state.rotation%360)+360)%360;
@@ -313,6 +324,7 @@
     void wheel.offsetWidth;
     wheel.style.transition=`transform ${remainingMs}ms cubic-bezier(.12,.72,.1,1)`;
     wheel.style.transform=`rotate(${target}deg)`;
+    startSpinSound(wheel,visibleStart,remainingMs);
     setTimeout(()=>{
       stopSpinSound();if(state.active)tone(color==='green'?980:color==='red'?720:610,.3,.07);
       $('#wheelResult').textContent=String(number);$('#wheelStatus').textContent='ВЫИГРАЛ '+({red:'КРАСНЫЙ',black:'ЧЁРНЫЙ',green:'ЗЕЛЁНЫЙ'}[color]||'');

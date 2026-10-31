@@ -162,3 +162,19 @@ button,.feature-card,.game-list-card,.promo-card,.double-bet{transition:transfor
 @keyframes taskRewardPop{0%{opacity:0;transform:translate(-50%,-30%) scale(.65)}14%,72%{opacity:1;transform:translate(-50%,-50%) scale(1)}100%{opacity:0;transform:translate(-50%,-85%) scale(.95)}}
 .balance-reward-pulse{animation:balanceRewardPulse .8s ease}
 @keyframes balanceRewardPulse{0%,100%{filter:none;transform:scale(1)}35%{filter:brightness(1.8) drop-shadow(0 0 9px #39e88b);transform:scale(1.13)}}
+
+
+/* v16: brighter atmosphere, slow multi-colour gradient smoke */
+body{background-color:#091711;background-image:radial-gradient(ellipse at 12% 8%,rgba(39,226,151,.17),transparent 36%),radial-gradient(ellipse at 88% 34%,rgba(125,91,226,.16),transparent 39%),radial-gradient(ellipse at 52% 100%,rgba(30,149,190,.10),transparent 42%),linear-gradient(155deg,#081a14,#0b1020 58%,#101324);background-attachment:fixed}
+.app-shell{z-index:1}
+body:before,body:after{content:"";position:fixed;inset:-28%;z-index:0;pointer-events:none;filter:blur(52px);mix-blend-mode:screen;will-change:transform,opacity}
+body:before{background:radial-gradient(ellipse at 22% 42%,rgba(35,222,151,.19),transparent 31%),radial-gradient(ellipse at 73% 55%,rgba(118,88,222,.19),transparent 34%),radial-gradient(ellipse at 48% 78%,rgba(35,159,201,.12),transparent 29%);animation:ambientSmokeV16 34s ease-in-out infinite alternate}
+body:after{background:radial-gradient(ellipse at 78% 22%,rgba(41,203,157,.12),transparent 30%),radial-gradient(ellipse at 30% 70%,rgba(159,92,210,.13),transparent 33%);animation:ambientSmokeV16b 46s ease-in-out infinite alternate}
+@keyframes ambientSmokeV16{0%{transform:translate3d(-5%,2%,0) rotate(-8deg) scale(.94);opacity:.55}50%{transform:translate3d(3%,-4%,0) rotate(7deg) scale(1.08);opacity:1}100%{transform:translate3d(7%,4%,0) rotate(-3deg) scale(1.02);opacity:.72}}
+@keyframes ambientSmokeV16b{0%{transform:translate3d(5%,-3%,0) rotate(10deg) scale(1.04);opacity:.35}100%{transform:translate3d(-6%,5%,0) rotate(-9deg) scale(.96);opacity:.8}}
+.game-list-card{background:linear-gradient(115deg,rgba(21,54,43,.94),rgba(20,25,43,.94));border-color:rgba(131,239,190,.2);box-shadow:inset 0 1px rgba(255,255,255,.07),0 12px 30px #0003}
+.game-card-art.cases-art{background:radial-gradient(circle at 50% 40%,#8a72ed 0,#3e3a91 28%,#174e50 68%,#09251e 100%);color:#e9e2ff;box-shadow:inset 0 0 24px #ffffff17}
+.cases-art>svg{width:43px;height:43px;filter:drop-shadow(0 0 13px #a994ff)}
+.cases-art-spark{position:absolute;right:17px;top:13px;color:#c8ffdf;font-size:23px;text-shadow:0 0 13px #79ffd0;animation:symbolFloat 4s ease-in-out infinite}
+.feature-card,.case-card,.form-card,.balance-card{border-color:rgba(155,240,194,.16)}
+@media(prefers-reduced-motion:reduce){body:before,body:after,.cases-art-spark{animation:none}}
