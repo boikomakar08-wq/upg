@@ -142,7 +142,7 @@ button,.feature-card,.game-list-card,.promo-card,.double-bet{transition:transfor
 /* v7: bottom-nav-only whoosh and fixed bottom upgrader hit marker */
 .upgrade-meter .chance-ring{background:transparent!important;isolation:isolate;}
 /* Static winning arc is centred at the bottom; only the pointer rotates. */
-.upgrade-meter .chance-ring:after{content:"";position:absolute;inset:0;border-radius:50%;z-index:0;background:conic-gradient(from 180deg,var(--accent) var(--chance),var(--line) 0);pointer-events:none;}
+.upgrade-meter .chance-ring:after{content:"";position:absolute;inset:0;border-radius:50%;z-index:0;background:conic-gradient(from var(--chance-start, 90deg),var(--accent) var(--chance),var(--line) 0);pointer-events:none;}
 .upgrade-meter .chance-ring:before{z-index:1;}
 .upgrade-meter .chance-ring>div{position:relative;z-index:2;}
 .upgrade-meter .chance-spin-pointer{top:-5px!important;bottom:auto!important;left:calc(50% - 2px);z-index:4;transform-origin:2px 96px!important;transform:rotate(0deg);animation:none!important;will-change:transform;}

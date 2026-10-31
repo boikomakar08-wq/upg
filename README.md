@@ -62,3 +62,12 @@ Telegram Mini App на Node.js / Express 5 с PostgreSQL.
 - Brighter gradients and smoother page entrance transitions.
 - User-provided cape/wind swipe sound is stored at `public/swipe-whoosh.mp3` and plays when navigating between sections.
 - Upgrader indicator rests at the bottom of the chance ring, aligned with the vertical axis.
+
+
+## Обновление v9 (31.10.2026)
+- Успешный апгрейд использует предоставленный звук `public/upgrade-success.mp3`.
+- Продажа предметов использует предоставленный звук `public/inventory-sell.mp3`.
+- DOUBLE использует предоставленный звук вращения `public/double-wheel-spin.mp3`, с зацикливанием и плавным снижением скорости воспроизведения по мере замедления колеса.
+- Удалён звук свайпа/перехода.
+- Зелёная зона шанса UPGRADER центрирована по нижней вертикальной оси; вращается указатель.
+- `/api/double/state` возвращает `settled_at`; при входе во время активной 5.4-секундной анимации клиент восстанавливает оставшуюся часть прокрутки.
