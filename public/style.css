@@ -153,3 +153,12 @@ button,.feature-card,.game-list-card,.promo-card,.double-bet{transition:transfor
 .upgrade-slot-button:disabled{opacity:.65;pointer-events:none;filter:saturate(.65)}
 
 .task-card{padding:15px;background:var(--panel);border:1px solid var(--line);border-radius:15px;margin:10px 0}.task-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.task-head b{font-size:12px}.task-head span,.task-card small{font-size:10px;color:var(--muted)}.task-card p{font-size:11px;color:var(--muted)}.task-progress{height:8px;background:var(--panel2);border-radius:20px;overflow:hidden;margin:12px 0 7px}.task-progress i{display:block;height:100%;background:linear-gradient(90deg,#39d782,#b8f66b);border-radius:20px}
+
+/* Weekly task reward celebration */
+.task-reward-spark{position:fixed;z-index:10000;width:7px;height:7px;border-radius:50%;pointer-events:none;background:radial-gradient(circle,#fffbd0 0%,#ffe45c 35%,#f5a623 70%,transparent 100%);box-shadow:0 0 9px #ffe45c,0 0 17px #ffbd35;animation:taskSparkFly .82s cubic-bezier(.16,.72,.25,1) forwards}
+@keyframes taskSparkFly{0%{opacity:0;transform:translate(-50%,-50%) scale(.3)}12%{opacity:1;transform:translate(-50%,-50%) scale(1.35)}100%{opacity:0;transform:translate(calc(-50% + var(--dx)),calc(-50% + var(--dy))) scale(.1)}}
+.task-reward-success{position:fixed;z-index:10001;left:50%;top:38%;transform:translate(-50%,-50%) scale(.7);padding:13px 19px;border:1px solid #36d887;background:linear-gradient(135deg,#0d3827f5,#12683ff2);color:#9dffc5;border-radius:16px;box-shadow:0 8px 35px #00d87855;font-weight:800;font-size:14px;white-space:nowrap;animation:taskRewardPop 2.1s ease forwards;pointer-events:none}
+.task-reward-success span{display:inline-grid;place-items:center;width:22px;height:22px;margin-right:7px;border-radius:50%;background:#32d783;color:#07331d;font-size:15px}
+@keyframes taskRewardPop{0%{opacity:0;transform:translate(-50%,-30%) scale(.65)}14%,72%{opacity:1;transform:translate(-50%,-50%) scale(1)}100%{opacity:0;transform:translate(-50%,-85%) scale(.95)}}
+.balance-reward-pulse{animation:balanceRewardPulse .8s ease}
+@keyframes balanceRewardPulse{0%,100%{filter:none;transform:scale(1)}35%{filter:brightness(1.8) drop-shadow(0 0 9px #39e88b);transform:scale(1.13)}}

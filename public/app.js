@@ -124,6 +124,7 @@
   function playTone(freq,duration,type='sine',volume=.035,delay=0){try{const ctx=audio(),osc=ctx.createOscillator(),gain=ctx.createGain();osc.type=type;osc.frequency.setValueAtTime(freq,ctx.currentTime+delay);gain.gain.setValueAtTime(volume,ctx.currentTime+delay);gain.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+delay+duration);osc.connect(gain);gain.connect(ctx.destination);osc.start(ctx.currentTime+delay);osc.stop(ctx.currentTime+delay+duration);}catch{}}
   const upgradeWinAudio=new Audio('/upgrade-success.mp3'); upgradeWinAudio.preload='auto'; upgradeWinAudio.volume=.36;
   const inventorySellAudio=new Audio('/inventory-sell.mp3'); inventorySellAudio.preload='auto'; inventorySellAudio.volume=.68;
+  const taskRewardAudio=new Audio('/task-reward.mp3'); taskRewardAudio.preload='auto'; taskRewardAudio.volume=.5;
   function playAssetSound(a){try{a.pause();a.currentTime=0;const p=a.play();p?.catch(()=>{});}catch{}}
   let caseTickIndex=0; function playCaseTick(){const n=caseTickIndex++;playTone(1180-(n%7)*38,.032,'triangle',.026);playTone(620-(n%5)*24,.055,'sine',.012,.012);}
   document.addEventListener('click',e=>{if(e.target.closest('button,a,[role=button]'))playTone(680,.05,'sine',.012);});
@@ -173,8 +174,25 @@
   previewFile($('#itemImage'),$('#itemImagePreview'));previewFile($('#caseImage'),$('#caseImagePreview'));
   function resetItemForm(){editingItemImage=null;$('#itemForm').reset();$('#itemId').value='';$('#itemFormTitle').textContent='Создать предмет';$('#itemCancelEdit').classList.add('hidden');$('#itemImagePreview').classList.add('hidden');$('#itemImagePreview').innerHTML='';$('#itemRarity').value='обычное';}
   function resetCaseForm(){editingCaseImage=null;$('#caseForm').reset();$('#caseId').value='';$('#caseFormTitle').textContent='Создать кейс';$('#caseCancelEdit').classList.add('hidden');$('#caseImagePreview').classList.add('hidden');$('#caseImagePreview').innerHTML='';}
+  function showTaskRewardEffect(button){
+    const from=button.getBoundingClientRect(), balanceEl=$('#topBalance')||$('#balance');
+    const to=balanceEl?.getBoundingClientRect();
+    const sx=from.left+from.width/2, sy=from.top+from.height/2;
+    const ex=to?to.left+to.width/2:window.innerWidth/2, ey=to?to.top+to.height/2:24;
+    for(let i=0;i<18;i++){
+      const spark=document.createElement('i'); spark.className='task-reward-spark';
+      spark.style.left=`${sx}px`; spark.style.top=`${sy}px`;
+      spark.style.setProperty('--dx',`${(ex-sx)*(0.55+Math.random()*.45)+(Math.random()-.5)*65}px`);
+      spark.style.setProperty('--dy',`${(ey-sy)*(0.55+Math.random()*.45)+(Math.random()-.5)*65}px`);
+      spark.style.animationDelay=`${Math.random()*.16}s`; document.body.appendChild(spark);
+      setTimeout(()=>spark.remove(),1050);
+    }
+    if(balanceEl){balanceEl.classList.remove('balance-reward-pulse');void balanceEl.offsetWidth;balanceEl.classList.add('balance-reward-pulse');setTimeout(()=>balanceEl.classList.remove('balance-reward-pulse'),850);}
+    const note=document.createElement('div');note.className='task-reward-success';note.innerHTML='<span>✓</span> Награда получена';document.body.appendChild(note);setTimeout(()=>note.remove(),2200);
+    try{taskRewardAudio.currentTime=0;taskRewardAudio.play().catch(()=>{});}catch{}
+  }
   async function loadTasks(){try{const tasks=await api('/api/tasks');$('#tasksList').innerHTML=tasks.length?tasks.map(t=>`<article class="task-card"><div class="task-head"><b>${escapeHtml(t.title)}</b><span>Награда: ${t.reward_type==='sparks'?`${money(t.reward_amount)} Искр`:escapeHtml(t.reward_name||'Предмет')}</span></div><p>${escapeHtml(t.description||'')}</p><div class="task-progress"><i style="width:${Math.min(100,100*Number(t.progress)/Number(t.target_count))}%"></i></div><small>${Number(t.progress)} / ${Number(t.target_count)} · сброс в понедельник</small>${t.completed&&!t.claimed?`<button class="mini-btn" data-claim-task="${t.id}">Забрать награду</button>`:t.claimed?'<em>Награда получена</em>':''}</article>`).join(''):'<div class="empty-state">На этой неделе заданий пока нет.</div>';}catch(e){$('#tasksList').innerHTML=`<div class="empty-state">${escapeHtml(e.message)}</div>`;}}
-  document.addEventListener('click',async e=>{const b=e.target.closest('[data-claim-task]');if(b){try{await api(`/api/tasks/${b.dataset.claimTask}/claim`,{method:'POST'});toast('Награда получена');await Promise.all([loadTasks(),loadMe()]);}catch(err){toast(err.message);}}});
+  document.addEventListener('click',async e=>{const b=e.target.closest('[data-claim-task]');if(b){b.disabled=true;try{await api(`/api/tasks/${b.dataset.claimTask}/claim`,{method:'POST'});showTaskRewardEffect(b);await Promise.all([loadTasks(),loadMe()]);}catch(err){toast(err.message);b.disabled=false;}}});
   async function loadAdminTasks(){const host=$('#adminTasksList');if(!host)return;host.innerHTML='<div class="loading">Загружаем задания…</div>';try{const response=await api('/api/admin/tasks');let tasks=Array.isArray(response)?response:null;if(!tasks&&response&&typeof response==='object'){for(const key of ['tasks','data','rows','results','items']){if(Array.isArray(response[key])){tasks=response[key];break;}}}if(!tasks){console.error('[ADMIN_TASKS] unexpected response shape:',response);const keys=response&&typeof response==='object'?Object.keys(response).join(', '):typeof response;throw new Error(`Не удалось распознать ответ сервера (поля: ${keys||'нет'}). Проверь Deploy Logs Railway.`);}host.innerHTML=tasks.map(t=>`<article class="admin-entry"><div class="admin-entry-main"><b>${escapeHtml(t.title)}</b><span>${({cases:'Открыть кейсы',upgrades:'Апгрейды',double_bets:'Ставки DOUBLE',upgrades_low_chance:`Успешный апгрейд < ${money(t.metric_threshold)}%`,withdrawals:'Заявки на вывод',withdrawal_min_amount:`Вывод от ${money(t.metric_threshold)} Искр`}[t.metric]||t.metric)} · цель ${t.target_count} · ${t.reward_type==='sparks'?money(t.reward_amount)+' Искр':escapeHtml(t.reward_name||'предмет')}</span></div><button class="tiny-btn danger" data-delete-task="${t.id}">Удалить</button></article>`).join('')||'<div class="empty-state">Заданий пока нет</div>';}catch(e){console.error('[ADMIN_TASKS] render failed:',e);host.textContent=e.message;}}
   function updateTaskThreshold(){const metric=$('#taskMetric')?.value,wrap=$('#taskThresholdWrap'),label=$('#taskThresholdLabel'),input=$('#taskThreshold');if(!wrap)return;const show=['upgrades_low_chance','withdrawal_min_amount'].includes(metric);wrap.classList.toggle('hidden',!show);if(metric==='upgrades_low_chance'){label.textContent='МАКСИМАЛЬНЫЙ ШАНС АПГРЕЙДА, %';input.min='0.01';input.max='100';input.value=input.value||'10';}else if(metric==='withdrawal_min_amount'){label.textContent='МИНИМАЛЬНАЯ СУММА ОДНОЙ ЗАЯВКИ, ИСКР';input.min='50';input.removeAttribute('max');if(Number(input.value)<50)input.value='100';}}
   $('#taskMetric')?.addEventListener('change',updateTaskThreshold);updateTaskThreshold();
