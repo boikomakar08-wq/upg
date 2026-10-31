@@ -151,3 +151,5 @@ button,.feature-card,.game-list-card,.promo-card,.double-bet{transition:transfor
 @media(prefers-reduced-motion:reduce){.upgrade-meter .chance-spin-pointer.spinning{animation-duration:.2s!important;}}
 
 .upgrade-slot-button:disabled{opacity:.65;pointer-events:none;filter:saturate(.65)}
+
+.task-card{padding:15px;background:var(--panel);border:1px solid var(--line);border-radius:15px;margin:10px 0}.task-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.task-head b{font-size:12px}.task-head span,.task-card small{font-size:10px;color:var(--muted)}.task-card p{font-size:11px;color:var(--muted)}.task-progress{height:8px;background:var(--panel2);border-radius:20px;overflow:hidden;margin:12px 0 7px}.task-progress i{display:block;height:100%;background:linear-gradient(90deg,#39d782,#b8f66b);border-radius:20px}

@@ -95,6 +95,7 @@ async function initDb() {
       stake NUMERIC(18,2) NOT NULL,
       reward_id BIGINT REFERENCES rewards(id),
       chance NUMERIC(8,4) NOT NULL,
+      displayed_chance NUMERIC(8,4),
       won BOOLEAN NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
@@ -131,6 +132,11 @@ async function initDb() {
     );
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS weekly_tasks (id BIGSERIAL PRIMARY KEY,title TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',metric TEXT NOT NULL CHECK(metric IN ('cases','upgrades','double_bets','upgrades_low_chance','withdrawals','withdrawal_min_amount')),metric_threshold NUMERIC(10,2) NOT NULL DEFAULT 10,target_count INTEGER NOT NULL CHECK(target_count>0),reward_type TEXT NOT NULL CHECK(reward_type IN ('sparks','item')),reward_amount NUMERIC(18,2) NOT NULL DEFAULT 0,reward_id BIGINT REFERENCES rewards(id),active BOOLEAN NOT NULL DEFAULT TRUE,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+    CREATE TABLE IF NOT EXISTS weekly_task_claims (id BIGSERIAL PRIMARY KEY,task_id BIGINT NOT NULL REFERENCES weekly_tasks(id) ON DELETE CASCADE,telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,week_start DATE NOT NULL,claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),UNIQUE(task_id,telegram_id,week_start));
+    ALTER TABLE weekly_tasks DROP CONSTRAINT IF EXISTS weekly_tasks_metric_check;
+    ALTER TABLE weekly_tasks ADD CONSTRAINT weekly_tasks_metric_check CHECK(metric IN ('cases','upgrades','double_bets','upgrades_low_chance','withdrawals','withdrawal_min_amount'));
+    ALTER TABLE weekly_tasks ADD COLUMN IF NOT EXISTS metric_threshold NUMERIC(10,2) NOT NULL DEFAULT 10;
     CREATE TABLE IF NOT EXISTS free_case_claims (
       telegram_id BIGINT PRIMARY KEY REFERENCES users(telegram_id) ON DELETE CASCADE,
       claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -161,6 +167,7 @@ async function initDb() {
   await pool.query(`
     ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS upgrader_multiplier NUMERIC(4,2) NOT NULL DEFAULT 1;
+    ALTER TABLE upgrades ADD COLUMN IF NOT EXISTS displayed_chance NUMERIC(8,4);
     ALTER TABLE rewards ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
     ALTER TABLE rewards ADD COLUMN IF NOT EXISTS rarity TEXT NOT NULL DEFAULT 'обычное';
     ALTER TABLE rewards ADD COLUMN IF NOT EXISTS background_color TEXT NOT NULL DEFAULT '#123c2b';
@@ -587,7 +594,7 @@ app.post("/api/upgrade", requireUser, async (req, res) => {
     // UI returns the unchanged displayed chance; the server uses the private multiplier for the actual roll.
     const won=Math.random()*100<realChance;
     await client.query("UPDATE inventory SET status='Апгрейд использован' WHERE id=$1",[inventoryId]);
-    await client.query("INSERT INTO upgrades(telegram_id,stake,reward_id,chance,won) VALUES($1,$2,$3,$4,$5)",[req.telegramUser.id,Number(stakeItem.reward_value),reward.id,loggedChance,won]);
+    await client.query("INSERT INTO upgrades(telegram_id,stake,reward_id,chance,displayed_chance,won) VALUES($1,$2,$3,$4,$5,$6)",[req.telegramUser.id,Number(stakeItem.reward_value),reward.id,loggedChance,displayedChance,won]);
     if(won) await client.query("INSERT INTO inventory(telegram_id,reward_name,reward_image,reward_value,reward_rarity,reward_background) VALUES($1,$2,$3,$4,$5,$6)",[req.telegramUser.id,reward.name,reward.image_url,reward.value,reward.rarity||'обычное',reward.background_color||'#123c2b']);
     await client.query("COMMIT");
     res.json({won,chance:displayedChance,reward:{id:reward.id,name:reward.name,image_url:reward.image_url,value:reward.value},stake:{id:stakeItem.id,name:stakeItem.reward_name,value:stakeItem.reward_value}});
@@ -897,6 +904,15 @@ async function startBotPolling() {
   };
   poll();
 }
+
+
+// Weekly quests: progress is calculated from authoritative activity tables for the current Monday-based week.
+function weekStartSql(){return "date_trunc('week', NOW())::date";}
+app.get('/api/tasks',requireUser,async(req,res)=>{try{const q=await pool.query(`SELECT t.*,COALESCE(p.progress,0)::int AS progress,COALESCE(c.claimed,FALSE) AS claimed,(COALESCE(p.progress,0)>=t.target_count) AS completed FROM weekly_tasks t LEFT JOIN LATERAL (SELECT CASE t.metric WHEN 'cases' THEN (SELECT COUNT(*) FROM case_openings x WHERE x.telegram_id=$1 AND x.created_at>=date_trunc('week',NOW())) WHEN 'upgrades' THEN (SELECT COUNT(*) FROM upgrades x WHERE x.telegram_id=$1 AND x.created_at>=date_trunc('week',NOW())) WHEN 'double_bets' THEN (SELECT COUNT(*) FROM double_bets x WHERE x.telegram_id=$1 AND x.created_at>=date_trunc('week',NOW())) WHEN 'upgrades_low_chance' THEN (SELECT COUNT(*) FROM upgrades x WHERE x.telegram_id=$1 AND x.created_at>=date_trunc('week',NOW()) AND x.won=TRUE AND COALESCE(x.displayed_chance,x.chance)<t.metric_threshold) WHEN 'withdrawals' THEN (SELECT COUNT(*) FROM withdrawal_requests x WHERE x.telegram_id=$1 AND x.created_at>=date_trunc('week',NOW()) AND x.status<>'cancelled') WHEN 'withdrawal_min_amount' THEN (SELECT COUNT(*) FROM withdrawal_requests x WHERE x.telegram_id=$1 AND x.created_at>=date_trunc('week',NOW()) AND x.status<>'cancelled' AND x.total_value>=t.metric_threshold) END AS progress) p ON TRUE LEFT JOIN LATERAL (SELECT TRUE AS claimed FROM weekly_task_claims x WHERE x.task_id=t.id AND x.telegram_id=$1 AND x.week_start=date_trunc('week',NOW())::date) c ON TRUE WHERE t.active=TRUE ORDER BY t.id`,[req.telegramUser.id]);res.json(q.rows);}catch(e){console.error('GET tasks:',e);res.status(500).json({error:'Не удалось загрузить задания'});}});
+app.get('/api/admin/tasks',requireUser,requireAdmin,async(_req,res)=>{try{const q=await pool.query('SELECT t.*,r.name AS reward_name FROM weekly_tasks t LEFT JOIN rewards r ON r.id=t.reward_id WHERE t.active ORDER BY t.id DESC');res.json(q.rows);}catch(e){res.status(500).json({error:'Не удалось загрузить задания'});}});
+app.post('/api/admin/tasks',requireUser,requireAdmin,async(req,res)=>{try{const {title,description='',metric,metric_threshold=10,target_count,reward_type,reward_amount=0,reward_id=null}=req.body||{};const metrics=['cases','upgrades','double_bets','upgrades_low_chance','withdrawals','withdrawal_min_amount'];const threshold=Number(metric_threshold);if(!String(title||'').trim()||!metrics.includes(metric)||!Number.isInteger(Number(target_count))||Number(target_count)<1||!['sparks','item'].includes(reward_type)||!Number.isFinite(threshold)||threshold<0)return res.status(400).json({error:'Проверь параметры задания'});if(metric==='upgrades_low_chance'&&(threshold<=0||threshold>100))return res.status(400).json({error:'Шанс должен быть больше 0 и не выше 100%'});if(metric==='withdrawal_min_amount'&&threshold<50)return res.status(400).json({error:'Минимальная сумма вывода — 50 Искр'});if(reward_type==='item'&&!reward_id)return res.status(400).json({error:'Выбери предмет награды'});const q=await pool.query('INSERT INTO weekly_tasks(title,description,metric,metric_threshold,target_count,reward_type,reward_amount,reward_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',[String(title).trim(),String(description),metric,threshold,Number(target_count),reward_type,Number(reward_amount)||0,reward_type==='item'?Number(reward_id):null]);res.status(201).json(q.rows[0]);}catch(e){console.error('Create task:',e);res.status(500).json({error:'Не удалось создать задание'});}});
+app.delete('/api/admin/tasks/:id',requireUser,requireAdmin,async(req,res)=>{try{await pool.query('UPDATE weekly_tasks SET active=FALSE WHERE id=$1',[req.params.id]);res.json({ok:true});}catch(e){res.status(500).json({error:'Не удалось удалить задание'});}});
+app.post('/api/tasks/:id/claim',requireUser,async(req,res)=>{const client=await pool.connect();try{await client.query('BEGIN');const task=(await client.query('SELECT * FROM weekly_tasks WHERE id=$1 AND active=TRUE FOR UPDATE',[req.params.id])).rows[0];if(!task)throw Object.assign(new Error('Задание не найдено'),{status:404});const week=(await client.query("SELECT date_trunc('week',NOW())::date AS d")).rows[0].d;const q=await client.query(`SELECT CASE $2 WHEN 'cases' THEN (SELECT COUNT(*) FROM case_openings WHERE telegram_id=$1 AND created_at>=date_trunc('week',NOW())) WHEN 'upgrades' THEN (SELECT COUNT(*) FROM upgrades WHERE telegram_id=$1 AND created_at>=date_trunc('week',NOW())) WHEN 'double_bets' THEN (SELECT COUNT(*) FROM double_bets WHERE telegram_id=$1 AND created_at>=date_trunc('week',NOW())) WHEN 'upgrades_low_chance' THEN (SELECT COUNT(*) FROM upgrades WHERE telegram_id=$1 AND created_at>=date_trunc('week',NOW()) AND won=TRUE AND COALESCE(displayed_chance,chance)<$3) WHEN 'withdrawals' THEN (SELECT COUNT(*) FROM withdrawal_requests WHERE telegram_id=$1 AND created_at>=date_trunc('week',NOW()) AND status<>'cancelled') WHEN 'withdrawal_min_amount' THEN (SELECT COUNT(*) FROM withdrawal_requests WHERE telegram_id=$1 AND created_at>=date_trunc('week',NOW()) AND status<>'cancelled' AND total_value>=$3) END AS n`,[req.telegramUser.id,task.metric,task.metric_threshold]);if(Number(q.rows[0].n)<Number(task.target_count))throw Object.assign(new Error('Задание ещё не выполнено'),{status:400});const claim=await client.query('INSERT INTO weekly_task_claims(task_id,telegram_id,week_start) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING id',[task.id,req.telegramUser.id,week]);if(!claim.rows.length)throw Object.assign(new Error('Награда уже получена'),{status:409});if(task.reward_type==='sparks'){await client.query('UPDATE users SET balance=balance+$1,updated_at=NOW() WHERE telegram_id=$2',[task.reward_amount,req.telegramUser.id]);}else{const r=(await client.query('SELECT * FROM rewards WHERE id=$1 AND active=TRUE',[task.reward_id])).rows[0];if(!r)throw Object.assign(new Error('Предмет награды недоступен'),{status:400});await client.query(`INSERT INTO inventory(telegram_id,reward_name,reward_image,reward_value,status,reward_rarity,reward_background) VALUES($1,$2,$3,$4,'Выдан за задание',$5,$6)`,[req.telegramUser.id,r.name,r.image_url,r.value,r.rarity,r.background_color]);}await client.query('COMMIT');res.json({ok:true});}catch(e){await client.query('ROLLBACK');res.status(e.status||500).json({error:e.message||'Не удалось выдать награду'});}finally{client.release();}});
 
 initDb().then(() => {
   app.listen(PORT, () => {
