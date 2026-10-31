@@ -126,7 +126,7 @@
   const inventorySellAudio=new Audio('/inventory-sell.mp3'); inventorySellAudio.preload='auto'; inventorySellAudio.volume=.68;
   const taskRewardAudio=new Audio('/task-reward.mp3'); taskRewardAudio.preload='auto'; taskRewardAudio.volume=.20;
   function playAssetSound(a){try{a.pause();a.currentTime=0;const p=a.play();p?.catch(()=>{});}catch{}}
-  let caseTickIndex=0; function playCaseTick(){const n=caseTickIndex++;playTone(1180-(n%7)*38,.032,'triangle',.026);playTone(620-(n%5)*24,.055,'sine',.012,.012);}
+  let caseTickIndex=0; function playCaseTick(){const n=caseTickIndex++;const pitch=1480+(n%5)*42;playTone(pitch,.018,'sine',.018);playTone(pitch*1.48,.012,'triangle',.008,.003);}
   document.addEventListener('click',e=>{if(e.target.closest('button,a,[role=button]'))playTone(680,.05,'sine',.012);});
   function rouletteProgress(x){let lo=0,hi=1,t=.5;for(let i=0;i<16;i++){t=(lo+hi)/2;const bx=3*(1-t)*(1-t)*t*.08+3*(1-t)*t*t*.08+t*t*t;if(bx<x)lo=t;else hi=t;}return 3*(1-t)*(1-t)*t*.72+3*(1-t)*t*t+t*t*t;}
   function playWin(){playTone(440,.14,'sine',.05);playTone(660,.18,'sine',.045,.1);playTone(880,.3,'triangle',.04,.23);}
