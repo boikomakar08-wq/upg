@@ -28,6 +28,7 @@
     if(page==='profile') loadMe();
     if(page==='cases') loadCases();
     if(page==='tasks') loadTasks();
+    if(page==='home') loadLeaderboard();
     if(page==='dailyBonus') loadDailyBonus();
     if(page==='topup') updateTopupButton();
     if(page==='admin' && isAdmin) refreshAdmin();
@@ -115,10 +116,15 @@
   }
   function safeColor(color){return /^#[0-9a-f]{6}$/i.test(color||'')?color:'#123c2b';}
   function rewardCard(r){return `<article class="reward-item">${r.image_url?`<img class="reward-image" src="${escapeAttr(r.image_url)}" alt="">`:`<div class="reward-placeholder"><i data-lucide="gift"></i></div>`}<div class="reward-info"><b>${escapeHtml(r.name)}</b><span>${escapeHtml(r.description||'Предмет коллекции')}</span><span class="rarity-text ${rarityClass(r.rarity)}">${escapeHtml(rarityLabel(r.rarity))}</span></div><span class="price">${money(r.value)} Искр</span></article>`;}
+  async function loadLeaderboard(){
+    const host=$('#leaderboardList');if(!host)return;host.innerHTML='<div class="loading">Загружаем рейтинг…</div>';
+    try{const data=await api('/api/leaderboard/winnings');const rows=data.leaders||[];host.innerHTML=rows.length?rows.map((u,i)=>{const rank=Number(u.rank)||i+1;const name=u.first_name|| (u.username?'@'+u.username:'Игрок');return `<article class="leaderboard-row ${rank<=3?'leader-top-'+rank:''}"><span class="leader-rank">${rank<=3?['🥇','🥈','🥉'][rank-1]:rank}</span><span class="leader-avatar">${u.photo_url?`<img src="${escapeAttr(u.photo_url)}" alt="">`:'<i data-lucide="user-round"></i>'}</span><span class="leader-name"><b>${escapeHtml(name)}</b><small>${u.username?'@'+escapeHtml(u.username):'Игрок BELIVEIN'}</small></span><strong>${money(u.total)} <i class="spark-icon">✦</i></strong></article>`}).join(''):'<div class="empty-state">Пока нет зафиксированных выигрышей.</div>';$('#leaderboardMine').textContent=data.myWinnings>0?`Твоё место: ${data.myRank||'—'} · Твои выигрыши: ${money(data.myWinnings)} Искр`:'Твои выигрыши появятся здесь после первой победы';icons();}
+    catch(e){host.innerHTML=`<div class="empty-state">${escapeHtml(e.message)}</div>`;}
+  }
   async function loadRewards(){
-    try{rewardsCache=await api('/api/rewards');$('#rewardCount').textContent=rewardsCache.length;$('#rewards').innerHTML=rewardsCache.length?rewardsCache.map(rewardCard).join(''):'<div class="empty-state">Пока нет предметов. Загляни позже.</div>';
+    try{rewardsCache=await api('/api/rewards');
       $('#upgradeReward').innerHTML=rewardsCache.map(r=>`<option value="${r.id}">${escapeHtml(r.name)} — ${money(r.value)} Искр</option>`).join('')||'<option value="">Нет предметов</option>';renderUpgradeTargets();if(rewardsCache.length)setTarget(rewardsCache[0].id);else updateUpgradePreview();icons();
-    }catch(e){$('#rewards').innerHTML='<p class="muted">Не удалось загрузить предметы.</p>';}
+    }catch(e){console.error('Не удалось загрузить предметы:',e);}
   }
   function caseCard(c){return `<article class="case-card" data-case-id="${c.id}"><div class="case-art">${c.image_url?`<img src="${escapeAttr(c.image_url)}" alt="">`:'<i class="case-glyph" data-lucide="package-open"></i>'}</div><div class="case-meta"><b>${escapeHtml(c.name)}</b><p>${escapeHtml(c.description||`${c.item_count||0} предметов внутри`)}</p><div class="case-bottom"><span class="case-price">${money(c.price)} Искр</span><button class="mini-btn" data-open-case="${c.id}">Открыть</button></div></div></article>`;}
   let audioCtx=null; function audio(){if(!audioCtx)audioCtx=new (window.AudioContext||window.webkitAudioContext)();if(audioCtx.state==='suspended')audioCtx.resume();return audioCtx;}
@@ -247,7 +253,7 @@
   $('#addCaseItemBtn').addEventListener('click',async()=>{const caseId=$('#contentsCase').value,reward_id=Number($('#contentsItem').value),visual_chance=Number($('#visualChance').value),real_chance=Number($('#realChance').value);if(!caseId||!reward_id){toast('Сначала создай кейс и предмет');return;}try{await api(`/api/admin/cases/${caseId}/items`,{method:'POST',body:JSON.stringify({reward_id,visual_chance,real_chance})});toast('Содержимое кейса сохранено');await loadCaseItems();await refreshAdmin();}catch(e){toast(e.message);}});
   async function loadCaseItems(){const id=$('#contentsCase').value;if(!id){$('#caseItemsList').innerHTML='<div class="empty-state">Создай кейс и добавь предметы.</div>';$('#caseChanceSum').textContent='';return;}try{const items=await api(`/api/admin/cases/${id}/items`);const sum=items.reduce((a,x)=>a+Number(x.real_chance),0);$('#caseChanceSum').textContent=`Сумма реальных шансов: ${sum.toFixed(2)}% ${Math.abs(sum-100)<.01?'— готово к открытию':'— для открытия нужно ровно 100%'}`;$('#caseItemsList').innerHTML=items.length?items.map(i=>`<article class="admin-entry"><img src="${escapeAttr(i.image_url||'')}" alt="" onerror="this.style.display='none'"><div class="admin-entry-main"><b>${escapeHtml(i.name)}</b><span>Визуальный: ${money(i.visual_chance)}% · Реальный: ${money(i.real_chance)}%</span></div><button class="tiny-btn danger" data-remove-case-item="${i.id}">Убрать</button></article>`).join(''):'<div class="empty-state">В этом кейсе пока нет предметов.</div>';}catch(e){$('#caseItemsList').innerHTML=`<div class="empty-state">${escapeHtml(e.message)}</div>`;}}
   async function checkAdmin(){try{const data=await api('/api/admin/status');isAdmin=!!data.isAdmin;$('#adminOpenBtn').classList.toggle('hidden',!isAdmin);}catch{isAdmin=false;}}
-  async function boot(){await checkAdmin();await Promise.all([loadMe(),loadRewards(),loadCases()]);if(isAdmin)await refreshAdmin();icons();}
+  async function boot(){await checkAdmin();await Promise.all([loadMe(),loadRewards(),loadCases(),loadLeaderboard()]);if(isAdmin)await refreshAdmin();icons();}
   window.__appApi=api; window.__appToast=toast; window.__appLoadMe=loadMe;
   boot();
 })();

@@ -328,6 +328,37 @@ app.post("/api/double/bet", requireUser, async (req,res) => {
   finally{client.release();}
 });
 
+app.get("/api/leaderboard/winnings", requireUser, async (req,res) => {
+  if (!pool) return res.json({leaders:[], myRank:null, myWinnings:0});
+  try {
+    const result = await pool.query(`
+      WITH winnings AS (
+        SELECT telegram_id, SUM(amount)::numeric AS total FROM (
+          SELECT telegram_id, reward_value AS amount FROM case_openings WHERE reward_value > 0
+          UNION ALL
+          SELECT u.telegram_id, r.value AS amount FROM upgrades u JOIN rewards r ON r.id=u.reward_id WHERE u.won=TRUE AND r.value > 0
+          UNION ALL
+          SELECT telegram_id, payout AS amount FROM double_bets WHERE payout > 0
+        ) game_wins GROUP BY telegram_id
+      ), ranked AS (
+        SELECT w.telegram_id, w.total, u.username, u.first_name, u.photo_url,
+          ROW_NUMBER() OVER (ORDER BY w.total DESC, w.telegram_id ASC) AS rank
+        FROM winnings w JOIN users u ON u.telegram_id=w.telegram_id
+      )
+      SELECT telegram_id, total, username, first_name, photo_url, rank,
+        (telegram_id=$1) AS is_me
+      FROM ranked ORDER BY rank LIMIT 100`,[req.telegramUser.id]);
+    const mine = result.rows.find(x=>x.is_me);
+    let myRank=mine?Number(mine.rank):null, myWinnings=mine?Number(mine.total):0;
+    if(!mine){const own=await pool.query(`SELECT COALESCE(SUM(amount),0)::numeric AS total FROM (
+      SELECT reward_value AS amount FROM case_openings WHERE telegram_id=$1 AND reward_value>0
+      UNION ALL SELECT r.value AS amount FROM upgrades u JOIN rewards r ON r.id=u.reward_id WHERE u.telegram_id=$1 AND u.won=TRUE AND r.value>0
+      UNION ALL SELECT payout AS amount FROM double_bets WHERE telegram_id=$1 AND payout>0
+    ) x`,[req.telegramUser.id]);myWinnings=Number(own.rows[0].total||0);if(myWinnings>0){const rank=await pool.query(`WITH w AS (SELECT telegram_id,SUM(amount)::numeric total FROM (SELECT telegram_id,reward_value amount FROM case_openings WHERE reward_value>0 UNION ALL SELECT u.telegram_id,r.value FROM upgrades u JOIN rewards r ON r.id=u.reward_id WHERE u.won=TRUE AND r.value>0 UNION ALL SELECT telegram_id,payout FROM double_bets WHERE payout>0) z GROUP BY telegram_id) SELECT COUNT(*)::int+1 AS rank FROM w WHERE total>$1`,[myWinnings]);myRank=Number(rank.rows[0].rank);}}
+    res.json({leaders:result.rows.slice(0,10),myRank,myWinnings});
+  } catch(e){console.error('Leaderboard winnings:',e);res.status(500).json({error:'Не удалось загрузить топ игроков'});}
+});
+
 app.get("/api/me", requireUser, async (req, res) => {
   if (!pool) return res.json({ user: { telegram_id: req.telegramUser.id, username: req.telegramUser.username || null, first_name: req.telegramUser.first_name || null, photo_url: req.telegramUser.photo_url || null, created_at: null }, balance: 0, inventory: [], stats: {} });
   try {
