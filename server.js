@@ -138,6 +138,7 @@ async function initDb() {
     ALTER TABLE weekly_tasks ADD CONSTRAINT weekly_tasks_metric_check CHECK(metric IN ('cases','upgrades','double_bets','upgrades_low_chance','withdrawals','withdrawal_min_amount','channel_subscription'));
     ALTER TABLE weekly_tasks ADD COLUMN IF NOT EXISTS metric_threshold NUMERIC(10,2) NOT NULL DEFAULT 10;
     ALTER TABLE weekly_tasks ADD COLUMN IF NOT EXISTS channel_url TEXT;
+    CREATE TABLE IF NOT EXISTS daily_bonus_claims (telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE, claim_date DATE NOT NULL DEFAULT CURRENT_DATE, streak_day INTEGER NOT NULL CHECK(streak_day BETWEEN 1 AND 7), reward_amount NUMERIC(18,2) NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(telegram_id,claim_date));
     CREATE TABLE IF NOT EXISTS free_case_claims (
       telegram_id BIGINT PRIMARY KEY REFERENCES users(telegram_id) ON DELETE CASCADE,
       claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -909,6 +910,42 @@ async function startBotPolling() {
 
 // Weekly quests: progress is calculated from authoritative activity tables for the current Monday-based week.
 function weekStartSql(){return "date_trunc('week', NOW())::date";}
+const DAILY_BONUS_REWARDS = [10, 15, 20, 25, 30, 40, 75];
+const DAILY_BONUS_MIN_STARS = 50;
+app.get('/api/daily-bonus',requireUser,async(req,res)=>{
+  try {
+    const deposit=await pool.query('SELECT COALESCE(SUM(stars_amount),0)::int AS total_stars FROM star_payments WHERE telegram_id=$1',[req.telegramUser.id]);
+    const totalStars=Number(deposit.rows[0]?.total_stars||0), eligible=totalStars>DAILY_BONUS_MIN_STARS;
+    if(!eligible) return res.json({eligible:false,totalStars,requiredStars:DAILY_BONUS_MIN_STARS,rewards:DAILY_BONUS_REWARDS,claimedToday:false,streak:0,nextDay:1,lastClaim:null,lastReward:0});
+    const q=await pool.query(`SELECT claim_date::text,streak_day,reward_amount,(claim_date=CURRENT_DATE) AS claimed_today,(claim_date=CURRENT_DATE-1) AS claimed_yesterday FROM daily_bonus_claims WHERE telegram_id=$1 ORDER BY claim_date DESC LIMIT 1`,[req.telegramUser.id]);
+    const last=q.rows[0]||null;
+    const streak=last?(last.claimed_today||last.claimed_yesterday?Number(last.streak_day):0):0;
+    const nextDay=last?(last.claimed_today?Number(last.streak_day)%7+1:(last.claimed_yesterday?Number(last.streak_day)%7+1:1)):1;
+    res.json({eligible:true,totalStars,requiredStars:DAILY_BONUS_MIN_STARS,rewards:DAILY_BONUS_REWARDS,claimedToday:!!last?.claimed_today,streak,nextDay,lastClaim:last?.claim_date||null,lastReward:last?Number(last.reward_amount):0});
+  } catch(e){console.error('GET daily bonus:',e);res.status(500).json({error:'Не удалось загрузить ежедневный бонус'});}
+});
+app.post('/api/daily-bonus/claim',requireUser,async(req,res)=>{
+  const client=await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const user=await client.query('SELECT balance FROM users WHERE telegram_id=$1 FOR UPDATE',[req.telegramUser.id]);
+    if(!user.rows[0]) throw Object.assign(new Error('Пользователь не найден'),{status:404});
+    const deposit=await client.query('SELECT COALESCE(SUM(stars_amount),0)::int AS total_stars FROM star_payments WHERE telegram_id=$1',[req.telegramUser.id]);
+    const totalStars=Number(deposit.rows[0]?.total_stars||0);
+    if(totalStars<=DAILY_BONUS_MIN_STARS) throw Object.assign(new Error(`Ежедневные бонусы доступны при общем депозите более ${DAILY_BONUS_MIN_STARS} Telegram Stars. Сейчас у тебя ${totalStars}.`),{status:403});
+    const q=await client.query(`SELECT claim_date::text,streak_day,(claim_date=CURRENT_DATE) AS claimed_today,(claim_date=CURRENT_DATE-1) AS claimed_yesterday FROM daily_bonus_claims WHERE telegram_id=$1 ORDER BY claim_date DESC LIMIT 1`,[req.telegramUser.id]);
+    const last=q.rows[0]||null;
+    if(last?.claimed_today) throw Object.assign(new Error('Сегодня ты уже забрал ежедневную награду'),{status:409});
+    const day=last?.claimed_yesterday?(Number(last.streak_day)%7)+1:1;
+    const reward=DAILY_BONUS_REWARDS[day-1];
+    await client.query('INSERT INTO daily_bonus_claims(telegram_id,claim_date,streak_day,reward_amount) VALUES($1,CURRENT_DATE,$2,$3)',[req.telegramUser.id,day,reward]);
+    const balance=await client.query('UPDATE users SET balance=balance+$1,updated_at=NOW() WHERE telegram_id=$2 RETURNING balance',[reward,req.telegramUser.id]);
+    await client.query('COMMIT');
+    res.json({ok:true,day,reward,balance:Number(balance.rows[0].balance)});
+  } catch(e){await client.query('ROLLBACK');console.error('POST daily bonus:',e);res.status(e.status||500).json({error:e.message||'Не удалось получить награду'});}
+  finally{client.release();}
+});
+
 app.get('/api/tasks',requireUser,async(req,res)=>{try{const q=await pool.query(`SELECT t.*,COALESCE(p.progress,0)::int AS progress,COALESCE(c.claimed,FALSE) AS claimed,(COALESCE(p.progress,0)>=t.target_count) AS completed FROM weekly_tasks t LEFT JOIN LATERAL (SELECT CASE t.metric WHEN 'cases' THEN (SELECT COUNT(*) FROM case_openings x WHERE x.telegram_id=$1 AND x.created_at>=GREATEST(date_trunc('week',NOW()),t.created_at)) WHEN 'upgrades' THEN (SELECT COUNT(*) FROM upgrades x WHERE x.telegram_id=$1 AND x.created_at>=GREATEST(date_trunc('week',NOW()),t.created_at)) WHEN 'double_bets' THEN (SELECT COUNT(*) FROM double_bets x WHERE x.telegram_id=$1 AND x.created_at>=GREATEST(date_trunc('week',NOW()),t.created_at)) WHEN 'upgrades_low_chance' THEN (SELECT COUNT(*) FROM upgrades x WHERE x.telegram_id=$1 AND x.created_at>=GREATEST(date_trunc('week',NOW()),t.created_at) AND x.won=TRUE AND COALESCE(x.displayed_chance,x.chance)<t.metric_threshold) WHEN 'withdrawals' THEN (SELECT COUNT(*) FROM withdrawal_requests x WHERE x.telegram_id=$1 AND x.created_at>=GREATEST(date_trunc('week',NOW()),t.created_at) AND x.status<>'cancelled') WHEN 'withdrawal_min_amount' THEN (SELECT COUNT(*) FROM withdrawal_requests x WHERE x.telegram_id=$1 AND x.created_at>=GREATEST(date_trunc('week',NOW()),t.created_at) AND x.status<>'cancelled' AND x.total_value>=t.metric_threshold) END AS progress) p ON TRUE LEFT JOIN LATERAL (SELECT TRUE AS claimed FROM weekly_task_claims x WHERE x.task_id=t.id AND x.telegram_id=$1 AND x.week_start=date_trunc('week',NOW())::date) c ON TRUE WHERE t.active=TRUE ORDER BY t.id`,[req.telegramUser.id]);res.json(q.rows);}catch(e){console.error('GET tasks:',e);res.status(500).json({error:'Не удалось загрузить задания'});}});
 app.get('/api/admin/tasks',requireUser,requireAdmin,async(req,res)=>{try{const q=await pool.query('SELECT t.*,r.name AS reward_name FROM weekly_tasks t LEFT JOIN rewards r ON r.id=t.reward_id WHERE t.active ORDER BY t.id DESC');console.log('[ADMIN_TASKS] loaded', {adminId:req.telegramUser?.id, count:q.rows.length});res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');res.json({tasks:q.rows});}catch(e){console.error('[ADMIN_TASKS] load failed:',e);res.status(500).json({error:'Не удалось загрузить задания',details:process.env.NODE_ENV==='production'?undefined:e.message});}});
 app.post('/api/admin/tasks',requireUser,requireAdmin,async(req,res)=>{try{const {title,description='',metric,metric_threshold=10,target_count,reward_type,reward_amount=0,reward_id=null,channel_url=''}=req.body||{};const metrics=['cases','upgrades','double_bets','upgrades_low_chance','withdrawals','withdrawal_min_amount','channel_subscription'];const threshold=Number(metric_threshold);if(!String(title||'').trim()||!metrics.includes(metric)||!Number.isInteger(Number(target_count))||Number(target_count)<1||!['sparks','item'].includes(reward_type)||!Number.isFinite(threshold)||threshold<0)return res.status(400).json({error:'Проверь параметры задания'});if(metric==='channel_subscription'&&!/^https?:\/\/(t\.me\/|telegram\.me\/)[A-Za-z0-9_]{5,32}\/?$/.test(String(channel_url).trim()))return res.status(400).json({error:'Укажи публичную ссылку канала вида https://t.me/channel'});if(metric==='upgrades_low_chance'&&(threshold<=0||threshold>100))return res.status(400).json({error:'Шанс должен быть больше 0 и не выше 100%'});if(metric==='withdrawal_min_amount'&&threshold<50)return res.status(400).json({error:'Минимальная сумма вывода — 50 Искр'});if(reward_type==='item'&&!reward_id)return res.status(400).json({error:'Выбери предмет награды'});const q=await pool.query('INSERT INTO weekly_tasks(title,description,metric,metric_threshold,target_count,reward_type,reward_amount,reward_id,channel_url) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',[String(title).trim(),String(description),metric,threshold,Number(target_count),reward_type,Number(reward_amount)||0,reward_type==='item'?Number(reward_id):null,metric==='channel_subscription'?String(channel_url).trim():null]);console.log('[ADMIN_TASKS] created',{id:q.rows[0]?.id,metric});res.status(201).json(q.rows[0]);}catch(e){console.error('[ADMIN_TASKS] create failed:',e);res.status(500).json({error:'Не удалось создать задание'});}});

@@ -21,13 +21,14 @@
   function showPage(page) {
     if(page!==currentPage){currentPage=page;}
     if(page!=='double') window.__stopDoubleSound?.();
-    const pages=['home','cases','caseDetail','games','double','upgrader','topup','inventory','profile','settings','admin','tasks'];
+    const pages=['home','cases','caseDetail','games','double','upgrader','topup','inventory','profile','settings','admin','tasks','dailyBonus'];
     pages.forEach(p=>$('#'+p+'Page')?.classList.toggle('hidden',p!==page));
     $$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.page===page));
     if(page==='inventory'||page==='upgrader') loadMe();
     if(page==='profile') loadMe();
     if(page==='cases') loadCases();
     if(page==='tasks') loadTasks();
+    if(page==='dailyBonus') loadDailyBonus();
     if(page==='topup') updateTopupButton();
     if(page==='admin' && isAdmin) refreshAdmin();
     window.scrollTo({top:0,behavior:'smooth'}); icons();
@@ -192,6 +193,30 @@
     try{taskRewardAudio.currentTime=0;taskRewardAudio.play().catch(()=>{});}catch{}
   }
   const subscriptionReady=new Set();
+  const dailyBonusRewards=[10,15,20,25,30,40,75];
+  async function loadDailyBonus(){
+    const calendar=$('#dailyBonusCalendar');if(!calendar)return;
+    try{
+      const data=await api('/api/daily-bonus');
+      const rewards=Array.isArray(data.rewards)?data.rewards:dailyBonusRewards;
+      const claimed=!!data.claimedToday, streak=Number(data.streak||0), next=Number(data.nextDay||1);
+      const button=$('#dailyBonusClaim');
+      if(data.eligible===false){
+        $('#dailyBonusStreak').textContent='Заблокировано';
+        calendar.innerHTML=rewards.map((value,i)=>`<article class="daily-bonus-day is-locked"><span>ДЕНЬ ${i+1}</span><b>✦ ${money(value)}</b><small>Доступно после депозита</small><i data-lucide="lock"></i></article>`).join('');
+        button.disabled=true;button.textContent='Доступно от 51 ⭐';
+        $('#dailyBonusStatus').innerHTML=`Для ежедневных бонусов нужен общий депозит <b>более 50 Telegram Stars</b>.<br>Твой общий депозит: <b>${money(data.totalStars||0)} ⭐</b>. Пополни баланс, чтобы открыть календарь. <button class="mini-btn" data-page="topup">Пополнить</button>`;
+        icons();return;
+      }
+      $('#dailyBonusStreak').textContent=`${streak} ${streak===1?'день':streak>=2&&streak<=4?'дня':'дней'}`;
+      calendar.innerHTML=rewards.map((value,i)=>{const day=i+1,done=claimed?day<=Number(data.streak||0):day<next;const current=day===next&&!claimed;return `<article class="daily-bonus-day ${done?'is-done':''} ${current?'is-current':''}"><span>ДЕНЬ ${day}</span><b>✦ ${money(value)}</b><small>${done?'Получено':current?'Следующая награда':'Впереди'}</small>${done?'<i data-lucide="check-circle-2"></i>':''}</article>`}).join('');
+      button.disabled=claimed;button.textContent=claimed?'Награда уже получена':'Забрать награду';
+      $('#dailyBonusStatus').textContent=claimed?'Сегодняшний бонус уже у тебя. Возвращайся завтра, чтобы продолжить серию.':`Сегодня доступен день ${next} — ${money(rewards[next-1]||rewards[0])} Искр. Твой общий депозит: ${money(data.totalStars||0)} ⭐.`;
+      icons();
+    }catch(e){calendar.innerHTML=`<div class="empty-state">${escapeHtml(e.message)}</div>`;$('#dailyBonusClaim').disabled=true;}
+  }
+  $('#dailyBonusClaim')?.addEventListener('click',async()=>{const button=$('#dailyBonusClaim');button.disabled=true;try{const result=await api('/api/daily-bonus/claim',{method:'POST'});showTaskRewardEffect(button);toast(`День ${result.day}: +${money(result.reward)} Искр!`);await Promise.all([loadDailyBonus(),loadMe()]);}catch(e){toast(e.message);button.disabled=false;await loadDailyBonus();}});
+
   async function loadTasks(){try{const tasks=await api('/api/tasks');$('#tasksList').innerHTML=tasks.length?tasks.map(t=>{const reward=t.reward_type==='sparks'?`${money(t.reward_amount)} Искр`:escapeHtml(t.reward_name||'Предмет');if(t.metric==='channel_subscription')return `<article class="task-card"><div class="task-head"><b>${escapeHtml(t.title)}</b><span>Награда: ${reward}</span></div><p>${escapeHtml(t.description||'Подпишись на канал, чтобы получить награду.')}</p>${t.claimed?'<em>✓ Награда получена</em>':subscriptionReady.has(String(t.id))?`<button class="mini-btn" data-check-subscription="${t.id}">Проверить подписку</button>`:`<button class="mini-btn" data-subscribe-task="${t.id}" data-channel="${escapeAttr(t.channel_url||'')}">Подписаться</button>`}</article>`;return `<article class="task-card"><div class="task-head"><b>${escapeHtml(t.title)}</b><span>Награда: ${reward}</span></div><p>${escapeHtml(t.description||'')}</p><div class="task-progress"><i style="width:${Math.min(100,100*Number(t.progress)/Number(t.target_count))}%"></i></div><small>${Number(t.progress)} / ${Number(t.target_count)} · сброс в понедельник</small>${t.completed&&!t.claimed?`<button class="mini-btn" data-claim-task="${t.id}">Забрать награду</button>`:t.claimed?'<em>Награда получена</em>':''}</article>`;}).join(''):'<div class="empty-state">На этой неделе заданий пока нет.</div>';}catch(e){$('#tasksList').innerHTML=`<div class="empty-state">${escapeHtml(e.message)}</div>`;}}
   document.addEventListener('click',async e=>{const sub=e.target.closest('[data-subscribe-task]');if(sub){const url=sub.dataset.channel;if(!url){toast('Ссылка на канал не указана');return;}subscriptionReady.add(String(sub.dataset.subscribeTask));try{if(tg?.openTelegramLink)tg.openTelegramLink(url);else window.open(url,'_blank','noopener');await loadTasks();}catch(err){toast('Не удалось открыть канал');}return;}const check=e.target.closest('[data-check-subscription]');if(check){check.disabled=true;try{await api(`/api/tasks/${check.dataset.checkSubscription}/verify-subscription`,{method:'POST'});showTaskRewardEffect(check);subscriptionReady.delete(String(check.dataset.checkSubscription));await Promise.all([loadTasks(),loadMe()]);}catch(err){toast(err.message);check.disabled=false;}return;}const b=e.target.closest('[data-claim-task]');if(b){b.disabled=true;try{await api(`/api/tasks/${b.dataset.claimTask}/claim`,{method:'POST'});showTaskRewardEffect(b);await Promise.all([loadTasks(),loadMe()]);}catch(err){toast(err.message);b.disabled=false;}}});
   async function loadAdminTasks(){const host=$('#adminTasksList');if(!host)return;host.innerHTML='<div class="loading">Загружаем задания…</div>';try{const response=await api('/api/admin/tasks');let tasks=Array.isArray(response)?response:null;if(!tasks&&response&&typeof response==='object'){for(const key of ['tasks','data','rows','results','items']){if(Array.isArray(response[key])){tasks=response[key];break;}}}if(!tasks){console.error('[ADMIN_TASKS] unexpected response shape:',response);const keys=response&&typeof response==='object'?Object.keys(response).join(', '):typeof response;throw new Error(`Не удалось распознать ответ сервера (поля: ${keys||'нет'}). Проверь Deploy Logs Railway.`);}host.innerHTML=tasks.map(t=>`<article class="admin-entry"><div class="admin-entry-main"><b>${escapeHtml(t.title)}</b><span>${({cases:'Открыть кейсы',upgrades:'Апгрейды',double_bets:'Ставки DOUBLE',upgrades_low_chance:`Успешный апгрейд < ${money(t.metric_threshold)}%`,withdrawals:'Заявки на вывод',withdrawal_min_amount:`Вывод от ${money(t.metric_threshold)} Искр`}[t.metric]||t.metric)} · цель ${t.target_count} · ${t.reward_type==='sparks'?money(t.reward_amount)+' Искр':escapeHtml(t.reward_name||'предмет')}</span></div><button class="tiny-btn danger" data-delete-task="${t.id}">Удалить</button></article>`).join('')||'<div class="empty-state">Заданий пока нет</div>';}catch(e){console.error('[ADMIN_TASKS] render failed:',e);host.textContent=e.message;}}
